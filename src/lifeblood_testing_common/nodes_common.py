@@ -439,6 +439,7 @@ class TestCaseBase(IsolatedAsyncioTestCase):
             add_relative_to_PATH: Optional[Union[str, Path]] = None,
             commands_to_replace_with_py_mock: List[str] = None,
             expected_task_exit_code: int = 0,
+            extra_nodes_to_create: list[tuple[str, list[tuple[int, str, int, str]]]]|None = None,
     ):
         """
         helper for most general node testing:
@@ -457,6 +458,11 @@ class TestCaseBase(IsolatedAsyncioTestCase):
                 attr_patch.side_effect = lambda *args, **kwargs: updated_attrs.update(args[1]) \
                                                                  or print(f'update_task_attributes with {args}, {kwargs}')
                 node = create_node(node_type_to_create, f'test {node_type_to_create}', scheduler, 1)
+                if extra_nodes_to_create:
+                    for i, (extra_node_type, connection_pairs) in enumerate(extra_nodes_to_create, 2):
+                        extra_node = create_node(extra_node_type, f'test {extra_node_type} {i}', scheduler, i)
+                        for out_node_id, out_name, in_node_id, in_name in connection_pairs:
+                            await scheduler.add_node_connection(out_node_id, out_name, in_node_id, in_name)
 
                 # it's a list of dicts cuz sometimes we need strict ordering of sets
                 for params in node_params_to_set:
