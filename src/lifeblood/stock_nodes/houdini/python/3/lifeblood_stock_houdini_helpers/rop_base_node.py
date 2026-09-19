@@ -124,7 +124,8 @@ class RopBaseNode(BaseNodeWithTaskRequirements):
             f"        attrs = {{'frames': [frame], 'file': filepath, 'hipfile': {repr(hippath)}, 'outimage': outimage}}\n" \
             f"        for attr, val in {repr(attr_to_trans)}:\n" \
             f"            attrs[attr] = val\n" \
-            f"        lifeblood_connection.create_task(node.name() + '_spawned frame %g' % frame, attrs, order=frame)\n"
+            f"        print('@@', attrs)\n" \
+            f"        lifeblood_connection.create_task(node.name() + '_spawned frame %g' % frame, attrs, order=frame, blocking={repr(do_checkpoint)})\n"
 
         if not self.is_output_connected('spawned'):
             spawnlines = ''
@@ -225,7 +226,7 @@ class RopBaseNode(BaseNodeWithTaskRequirements):
             # TODO: consider input ignoring to be optional
         if spawnlines:
             script += \
-                f'    if {repr(context.param_value("gen for skipped"))} or not already_exists:\n' \
+                f'    if not frame_checkpointed and ({repr(context.param_value("gen for skipped"))} or not already_exists):\n' \
                 f'{spawnlines}'
         script += \
             f'print("all done!")\n'
