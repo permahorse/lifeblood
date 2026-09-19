@@ -2,8 +2,11 @@ import json
 
 import shutil
 from pathlib import Path
+
+from lifeblood.enums import SpawnStatus
 from lifeblood_testing_common.nodes_common import TestCaseBase, PseudoContext
 import tempfile
+from unittest import mock
 
 
 class TestHouRop(TestCaseBase):
@@ -60,6 +63,36 @@ class TestHouRop(TestCaseBase):
             expect_checkpoint_continue=False,
         )
 
+    async def test_hip_usd_generator_checkpoint_crash_continue_with_spawned(self):
+        await self._helper_test_hip_usd_generator_checkpoint_continue_discard(
+            first_do_checkpoint=True,
+            second_do_checkpoint=True,
+            expect_checkpoint_continue=True,
+            connect_spawned=True,
+        )
+
+    async def test_hip_usd_generator_no_checkpoint_crash_continue_with_spawned(self):
+        await self._helper_test_hip_usd_generator_checkpoint_continue_discard(
+            first_do_checkpoint=False,
+            second_do_checkpoint=False,
+            expect_checkpoint_continue=False,
+            connect_spawned=True,
+        )
+
+    async def test_hip_usd_generator_discard_checkpoint_different_hip_name_with_spawned(self):
+        await self._helper_test_hip_usd_generator_checkpoint_continue_discard(
+            second_file_name='test1.hip',
+            expect_checkpoint_continue=False,
+            connect_spawned=True,
+        )
+
+    async def test_hip_usd_generator_discard_checkpoint_different_params_with_spawned(self):
+        await self._helper_test_hip_usd_generator_checkpoint_continue_discard(
+            second_driver_path='/rop/anotherdriver',
+            expect_checkpoint_continue=False,
+            connect_spawned=True,
+        )
+
     #
     # hip_driver_renderer
     #
@@ -96,6 +129,36 @@ class TestHouRop(TestCaseBase):
             expect_checkpoint_continue=False,
         )
 
+    async def test_hip_driver_renderer_checkpoint_crash_continue_with_spawned(self):
+        await self._helper_test_hip_driver_renderer_checkpoint_continue_discard(
+            first_do_checkpoint=True,
+            second_do_checkpoint=True,
+            expect_checkpoint_continue=True,
+            connect_spawned=True,
+        )
+
+    async def test_hip_driver_renderer_no_checkpoint_crash_continue_with_spawned(self):
+        await self._helper_test_hip_driver_renderer_checkpoint_continue_discard(
+            first_do_checkpoint=False,
+            second_do_checkpoint=False,
+            expect_checkpoint_continue=False,
+            connect_spawned=True,
+        )
+
+    async def test_hip_driver_renderer_discard_checkpoint_different_hip_name_with_spawned(self):
+        await self._helper_test_hip_driver_renderer_checkpoint_continue_discard(
+            second_file_name='test1.hip',
+            expect_checkpoint_continue=False,
+            connect_spawned=True,
+        )
+
+    async def test_hip_driver_renderer_discard_checkpoint_different_params_with_spawned(self):
+        await self._helper_test_hip_driver_renderer_checkpoint_continue_discard(
+            second_driver_path='/rop/anotherdriver',
+            expect_checkpoint_continue=False,
+            connect_spawned=True,
+        )
+
     #
     #
     #
@@ -113,6 +176,7 @@ class TestHouRop(TestCaseBase):
             first_do_checkpoint=True,
             second_do_checkpoint=True,
             expect_checkpoint_continue: bool = True,
+            connect_spawned: bool = False,
     ):
         if second_extra_node_parms is None:
             second_extra_node_parms = {}
@@ -129,6 +193,17 @@ class TestHouRop(TestCaseBase):
                     f'{second_driver_path} ::: 12',
                     f'{second_driver_path} ::: 333',
                 ]
+        common_driver_data = {
+            'parms': {
+                'mkpath': False,
+                'runcommand': False,
+                'husk_mplay': False,
+                'savetodirectory_directory': '',
+                'lopoutput': 'loplop',
+                'take': '<main>',
+                'outputimage': '/foo/bar',
+            },
+        }
         await self._helper_test_checkpoint_continue_discard(
             node_type='hip_usd_generator',
             first_file_name=first_file_name,
@@ -136,10 +211,16 @@ class TestHouRop(TestCaseBase):
             first_hip_json={
                 'bad_frames': [12],
                 'default_output': str(self._tmp_path / 'out'),
+                'nodes': {
+                    first_driver_path: common_driver_data,
+                },
             },
             second_hip_json={
                 'bad_frames': [],
                 'default_output': str(self._tmp_path / 'out'),
+                'nodes': {
+                    second_driver_path: common_driver_data,
+                },
             },
             first_node_parms={
                 'hip path': (self._tmp_path / first_file_name),
@@ -156,6 +237,8 @@ class TestHouRop(TestCaseBase):
             },
             expect_checkpoint_to_exist_after_first=first_do_checkpoint,
             expected_driver_lines=expected_lines,
+            connect_spawned=connect_spawned,
+            expected_spawn_count=len(expected_lines) if connect_spawned else 0,
         )
 
     # hip_driver_renderer helpers
@@ -194,6 +277,7 @@ class TestHouRop(TestCaseBase):
             first_do_checkpoint=True,
             second_do_checkpoint=True,
             expect_checkpoint_continue: bool = True,
+            connect_spawned: bool = False,
     ):
         if second_extra_node_parms is None:
             second_extra_node_parms = {}
@@ -253,6 +337,8 @@ class TestHouRop(TestCaseBase):
             },
             expect_checkpoint_to_exist_after_first=first_do_checkpoint,
             expected_driver_lines=expected_lines,
+            connect_spawned=connect_spawned,
+            expected_spawn_count=len(expected_lines) if connect_spawned else 0,
         )
 
     #
@@ -303,37 +389,51 @@ class TestHouRop(TestCaseBase):
             second_node_parms: dict,
             expect_checkpoint_to_exist_after_first: bool,
             expected_driver_lines: list[str],
+            connect_spawned: bool,
+            expected_spawn_count: int = 0,
     ):
         (self._tmp_path / 'out').mkdir()
         with open(self._tmp_path / first_file_name, 'w') as f:
             json.dump(first_hip_json, f)
 
         checkpoint_path = self._tmp_path / f'task-{1}-{1}.chkpt'
-        await self._helper_test_simple_invocation(
-            node_type,
-            [first_node_parms],
-            {
-                'frames': [1234, 12, 333],
-            },
-            add_relative_to_PATH=Path(__file__).parent / 'data' / 'mock_houdini',
-            commands_to_replace_with_py_mock=['hython'],
-            expected_task_exit_code=1,
-        )
+        extra_nodes_to_create = []
+        if connect_spawned:
+            extra_nodes_to_create = [('null', [(1, 'spawned', 2, 'main')])]
+        spawn_call_count = 0
+        with mock.patch('lifeblood.scheduler.scheduler.Scheduler.spawn_tasks') as spawn_patch:
+            spawn_patch.return_value = (SpawnStatus.SUCCEEDED, 999)
+            await self._helper_test_simple_invocation(
+                node_type,
+                [first_node_parms],
+                {
+                    'frames': [1234, 12, 333],
+                },
+                add_relative_to_PATH=Path(__file__).parent / 'data' / 'mock_houdini',
+                commands_to_replace_with_py_mock=['hython'],
+                expected_task_exit_code=1,
+                extra_nodes_to_create=extra_nodes_to_create,
+            )
+            spawn_call_count += spawn_patch.call_count
         self.assertEqual(expect_checkpoint_to_exist_after_first, checkpoint_path.exists())
 
         with open(self._tmp_path / second_file_name, 'w') as f:
             json.dump(second_hip_json, f)
 
         # now run again, expect to continue from checkpoint
-        await self._helper_test_simple_invocation(
-            node_type,
-            [second_node_parms],
-            {
-                'frames': [1234, 12, 333],
-            },
-            add_relative_to_PATH=Path(__file__).parent / 'data' / 'mock_houdini',
-            commands_to_replace_with_py_mock=['hython'],
-        )
+        with mock.patch('lifeblood.scheduler.scheduler.Scheduler.spawn_tasks') as spawn_patch:
+            spawn_patch.return_value = (SpawnStatus.SUCCEEDED, 999)
+            await self._helper_test_simple_invocation(
+                node_type,
+                [second_node_parms],
+                {
+                    'frames': [1234, 12, 333],
+                },
+                add_relative_to_PATH=Path(__file__).parent / 'data' / 'mock_houdini',
+                commands_to_replace_with_py_mock=['hython'],
+                extra_nodes_to_create=extra_nodes_to_create,
+            )
+            spawn_call_count += spawn_patch.call_count
         self.assertFalse(checkpoint_path.exists())
 
         # now we expect no duplicated lines in log
@@ -345,3 +445,5 @@ class TestHouRop(TestCaseBase):
             expected_driver_lines,
             lines
         )
+
+        self.assertEqual(expected_spawn_count, spawn_call_count)
