@@ -16,8 +16,12 @@ class _NodeMock:
         self.__parms = parms
         self.__path = path
 
+    def name(self):
+        print(f'[MOCK-HOU] called Node.name for {self.__path}')
+        return self.__path.rsplit('/', 1)[-1]
+
     def render(self, frame_range=None, *args, **kwargs):
-        print(f'[MOCK-HOU] called Node.render', frame_range, args, kwargs)
+        print(f'[MOCK-HOU] called Node.render for {self.__path}', frame_range, args, kwargs)
         if frame_range is None:
             if _frame in _bad_frames:
                 raise NodeError('GLOBAL BAD FRAME!')
@@ -40,11 +44,12 @@ class _NodeMock:
         return self.parm(parm_name).eval()
 
     def parm(self, parm_name: str):
+        print(f'[MOCK-HOU] called Node.parm for {self.__path} {repr(parm_name)}')
         if self.__parms is None:
             return MagicMock()
-        if data := self.__parms.get(parm_name):
+        if (data := self.__parms.get(parm_name)) is not None:
             return _ParmMock(data)
-        raise NodeError()  # TODO: check, i think another error is raised in real hou
+        raise NodeError(self.__path, parm_name)  # TODO: check, i think another error is raised in real hou
 
     def __render_log(self, frame):
         if _default_output is None:
@@ -53,7 +58,7 @@ class _NodeMock:
             f.write(f'{self.__path} ::: {frame}\n')
 
     def __getattr__(self, item):
-        print(f'[MOCK-HOU] called Node.{item}')
+        print(f'[MOCK-HOU] called Node.{item} for {self.__path}')
         return MagicMock()
 
 class _ParmMock:
@@ -68,6 +73,10 @@ class _ParmMock:
 
     def evalAsStringAtFrame(self, frame: float):
         return self.__val
+
+    def __getattr__(self, item):
+        print(f'[MOCK-HOU] called Parm.{item}')
+        return MagicMock()
 
 
 class hipFile:
