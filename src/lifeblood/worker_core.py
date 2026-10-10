@@ -14,6 +14,7 @@ import tempfile
 from . import logging
 from .nethelpers import get_addr_to, get_localhost, get_hostname
 from .hardware_resources import HardwareResources
+from .resource_probe import ResourceProbeProviderBase, ResourceProbeBase
 from .worker_metadata import WorkerMetadata
 from .exceptions import WorkerNotAvailable, AlreadyRunning, \
     InvocationMessageWrongInvocationId, InvocationMessageAddresseeTimeout, InvocationCancelled
@@ -25,13 +26,13 @@ from .misc import get_unique_machine_id
 from . import environment_resolver
 from .enums import WorkerType, WorkerState, ProcessPriorityAdjustment
 from .paths import log_path
-from .process_utils import kill_process_tree
 from .misc import event_set_context
 from .net_messages.impl.tcp_simple_command_message_processor import TcpCommandMessageProcessor
 from .net_messages.address import AddressChain, DirectAddress
 from .net_messages.exceptions import MessageTransferError
 from .defaults import worker_start_port as default_worker_start_port
-from .worker_resource_definition import WorkerResourceDefinition, WorkerDeviceTypeDefinition
+from .worker_resource_definition import WorkerResourceDefinition, WorkerDeviceTypeDefinition, WorkerResourceValue
+from .process_container import ProcessContainerBase, ProcessBase
 
 from .worker_runtime_pythonpath import lifeblood_connection
 import inspect
@@ -47,6 +48,7 @@ class WorkerCore:
                  child_priority_adjustment: ProcessPriorityAdjustment = ProcessPriorityAdjustment.NO_CHANGE,
                  worker_type: WorkerType = WorkerType.STANDARD,
                  config: Optional[Config] = None,  # TODO: this should be replaced with config provider with a fixed interface
+                 hardware_probe_provider: ResourceProbeProviderBase | None = None,
                  singleshot: bool = False,
                  scheduler_ping_interval: float = 10,
                  scheduler_ping_miss_threshold: int = 6,
@@ -62,6 +64,9 @@ class WorkerCore:
         :param singleshot:
         """
         self.__config = config or get_config('worker')
+        self.__hardware_probe_provider = hardware_probe_provider
+        self.__hardware_probes: list[ResourceProbeBase] = []
+        self.__last_passive_probe_results = []
         self.__logger = logging.get_logger('worker')
         self.log_root_path: str = ''
         for self.log_root_path in (os.path.expandvars(self.__config.get_option_noasync('worker.logpath', log_path('invocations', 'worker', ensure_path_exists=False))),
@@ -85,7 +90,8 @@ class WorkerCore:
 
         self.__status = {}
         self.__scheduler_db_uid: int = 0  # unsigned 64bit int
-        self.__running_process: Optional[asyncio.subprocess.Process] = None
+        self.__running_process: Optional[ProcessBase] = None
+        self.__running_process_container: Optional[ProcessContainerBase] = None
         self.__running_process_start_time: float = 0
         self.__running_task: Optional[Invocation] = None
         self.__running_task_progress: Optional[float] = None
@@ -161,6 +167,7 @@ class WorkerCore:
         self.__scheduler_device_defs: Tuple[WorkerDeviceTypeDefinition, ...] = ()
         self.__scheduler_addr = scheduler_addr
         self.__scheduler_pinger = None
+        self.__passive_prober = None
         self.__components_stop_event = asyncio.Event()
         self.__extra_files_base_dir = None
         self.__my_addr_for_scheduler: Optional[AddressChain] = None
@@ -262,6 +269,11 @@ class WorkerCore:
 
             self.__message_address = DirectAddress.from_host_port(my_ip, my_port)
 
+            # initialize probes
+            self.__hardware_probes = []
+            for probe_factory in self.__hardware_probe_provider.get_all_probe_factories():
+                self.__hardware_probes.append(await probe_factory.create_probe())
+
             # now report our address to the scheduler
             metadata = WorkerMetadata(get_hostname())
             try:
@@ -286,6 +298,7 @@ class WorkerCore:
                 abort_start = True
 
             self.__scheduler_pinger = asyncio.create_task(self.scheduler_pinger())
+            self.__passive_prober = asyncio.create_task(self.passive_prober())
             self.__started = True
             self.__started_event.set()
         if abort_start:
@@ -319,6 +332,7 @@ class WorkerCore:
 
             async def _finalizer():
                 await self.__scheduler_pinger  # to ensure pinger stops and won't try to contact scheduler any more
+                await self.__passive_prober
                 await self.cancel_task()  # then we cancel task, here we still can report it to the scheduler.
                 # no new tasks will be picked up cuz __stopped is already set
                 self.__local_invocation_server.close()
@@ -449,11 +463,14 @@ class WorkerCore:
                 # TODO: proper child process priority adjustment should be done, for now it's implemented in constructor.
                 self.__running_process_start_time = time.time()
 
-                self.__running_process: asyncio.subprocess.Process = await resolver.create_process(
+                self.__running_process_container = await resolver.create_container(
                     resolver_arguments,
-                    args,
-                    extra_env=env,
                     resources_to_use=task.resources_to_use(),
+                )
+                self.__running_process = await self.__running_process_container.create_process(
+                    args,
+                    env=env,
+                    cwd=os.getcwd(),
                 )
             except Exception as e:
                 self.__logger.exception('task creation failed with error: %s' % (repr(e),))
@@ -497,8 +514,8 @@ class WorkerCore:
 
                 tasks_to_wait = {}
                 try:
-                    rout_task = asyncio.create_task(self.__running_process.stdout.readline())
-                    rerr_task = asyncio.create_task(self.__running_process.stderr.readline())
+                    rout_task = asyncio.create_task(self.__running_process.stdout().readline())
+                    rerr_task = asyncio.create_task(self.__running_process.stderr().readline())
                     done_task = asyncio.create_task(self.__running_process.wait())
                     flush_task = asyncio.create_task(_flush())
                     tasks_to_wait = {rout_task, rerr_task, done_task, flush_task}
@@ -511,7 +528,7 @@ class WorkerCore:
                                 self.__running_task_progress = progress
                             if buff_line != b'':  # this can only happen at eof
                                 await stdout.write(datetime.datetime.now().strftime('[OUT][%H:%M:%S] ').encode('UTF-8') + buff_line)
-                                rout_task = asyncio.create_task(self.__running_process.stdout.readline())
+                                rout_task = asyncio.create_task(self.__running_process.stdout().readline())
                                 tasks_to_wait.add(rout_task)
                         if rerr_task in done:
                             buff_line = rerr_task.result()
@@ -524,7 +541,7 @@ class WorkerCore:
                                     stderr.write(message),
                                     stdout.write(message)
                                 )
-                                rerr_task = asyncio.create_task(self.__running_process.stderr.readline())
+                                rerr_task = asyncio.create_task(self.__running_process.stderr().readline())
                                 tasks_to_wait.add(rerr_task)
 
                         # check if previous progress reporting task finished
@@ -691,11 +708,13 @@ class WorkerCore:
             cancelling_awaiter = self.__running_awaiter
             self.__running_awaiter = None
 
-            await kill_process_tree(self.__running_process)
+            self.__running_process.kill()
+            await self.__running_process.wait()
+
             self.__running_task.finish(None, time.time() - self.__running_process_start_time)
 
-            self.__running_process._transport.close()  # sometimes not closed straight away transport ON EXIT may cause exceptions in __del__ that event loop is closed
-
+            # start destroying container before reporting
+            self.__running_process_container.destroy()
             # report to scheduler that cancel was a success
             self.__logger.info(f'reporting cancel back to {self.__where_to_report}')
 
@@ -724,12 +743,15 @@ class WorkerCore:
             except:
                 self.__logger.exception('could not report cuz i have no idea')
             # end reporting
+            self.__logger.debug(f'done reporting done back to {self.__where_to_report}')
 
             try:
                 await self.delete_logs(self.__running_task.invocation_id())
             except OSError:
                 self.__logger.exception("failed to delete logs, ignoring")
 
+            # now wait till container is destroyed
+            await self.__running_process_container.wait()
             self.__running_task = None
             self.__worker_task_comm_queues = {}
             self.__running_process = None
@@ -760,6 +782,8 @@ class WorkerCore:
             process_exit_code = await self.__running_process.wait()
             self.__running_task.finish(process_exit_code, time.time() - self.__running_process_start_time)
 
+            # start destroying container before reporting
+            self.__running_process_container.destroy()
             # report to scheduler
             self.__logger.info(f'reporting done back to {self.__where_to_report}')
             try:
@@ -779,10 +803,18 @@ class WorkerCore:
             except OSError:
                 self.__logger.exception("failed to delete logs, ignoring")
 
+            # now wait till container is destroyed
+            try:
+                await self.__running_process_container.wait()
+            except Exception:
+                self.__logger.exception('failed to destroy process container')
+                # TODO: panic!
+
             self.__where_to_report = None
             self.__running_task = None
             self.__worker_task_comm_queues = {}
             self.__running_process = None
+            self.__running_process_container = None
             self.__previous_notrunning_awaiter = self.__running_awaiter  # this is JUST so task is not GCd
             self.__running_awaiter = None  # TODO: lol, this function can be called from awaiter, and if we hand below - awaiter can be gcd, and it's all fucked
             self.__running_task_progress = None
@@ -791,6 +823,19 @@ class WorkerCore:
             # stop ourselves if we are a small task helper
             if self.__singleshot:
                 self.stop()
+
+    async def probe_resources(self) -> dict[WorkerResourceDefinition, WorkerResourceValue] | None:
+        # early check before acquiring lock, just in case
+        if self.__running_process_container is None:
+            return None
+        async with self.__task_changing_state_lock:  # to ensure container is not destroyed while probing
+            if self.__running_process_container is None:
+                return None
+            all_results = {}
+            for probe in self.__hardware_probes:
+                all_results.update(await probe.probe(self.__running_process_container, None))
+
+            return all_results
 
     async def _cleanup_extra_files(self):
         """
@@ -803,6 +848,20 @@ class WorkerCore:
             shutil.rmtree(self.__extra_files_base_dir)
         except:
             self.__logger.exception('could not cleanup extra files')
+
+    #
+    # passive probe from time to time
+    async def passive_prober(self):
+        probe_interval = 5  # TODO: make configurable
+        exit_wait = asyncio.create_task(self.__components_stop_event.wait())
+        while True:
+            done, pend = await asyncio.wait((exit_wait,), timeout=probe_interval,
+                                            return_when=asyncio.FIRST_COMPLETED)
+            if exit_wait in done:
+                await exit_wait
+                break
+            self.__last_passive_probe_results = await self.probe_resources()
+            print(self.__last_passive_probe_results)
 
     #
     # simply ping scheduler once in a while
