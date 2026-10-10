@@ -3,17 +3,21 @@ import os
 import shutil
 from pathlib import Path
 from lifeblood import logging
-from lifeblood.impl.AsyncioProcess import AsyncioProcess
+from lifeblood.impl.asyncio_process import AsyncioProcess
 from lifeblood.process_container import ProcessBase, ProcessContainerBase, ProcessContainerFactoryBase
 from lifeblood.invocationjob import Environment, InvocationResources
 from lifeblood.process_utils import create_process
 from lifeblood.exceptions import ProcessInitializationError
 
-from .TrivialProcessContainer import TrivialProcessContainer
+from .trivial_process_container import TrivialProcessContainer
 
 
 class TrivialAsyncioProcessContainerFactory(ProcessContainerFactoryBase):
-    async def create_process_container(self, resources_restrictions: InvocationResources | None) -> ProcessContainerBase:
+    async def create_process_container(
+            self,
+            resources_restrictions: InvocationResources | None,
+            base_environment: Environment,
+    ) -> ProcessContainerBase:
         logger = logging.get_logger('Trivial Process Container Factory')
         if resources_restrictions is None:
             logger.info('no resource restriction requested')
@@ -26,7 +30,7 @@ class TrivialAsyncioProcessContainerFactory(ProcessContainerFactoryBase):
                           resources_restrictions.devices.items()) +
                 '\nbut standard environment resolver has no means of enforcing these limitations'
             )
-        return TrivialAsyncioProcessContainer()
+        return TrivialAsyncioProcessContainer(base_environment)
 
 
 class TrivialAsyncioProcessContainer(TrivialProcessContainer):
