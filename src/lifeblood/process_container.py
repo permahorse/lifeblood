@@ -9,13 +9,18 @@ class ContainerDestroyedError(RuntimeError):
 
 
 class ProcessContainerFactoryBase:
-    async def create_process_container(self, resources_restrictions: InvocationResources | None) -> ProcessContainerBase:
+    async def create_process_container(
+            self,
+            resources_restrictions: InvocationResources | None,
+            base_environment: Environment,
+            # TODO: mounts, capabilities, etc, but somehow platform-independent
+    ) -> ProcessContainerBase:
         raise NotImplementedError()
 
 
 class ProcessContainerBase:
     async def create_process(self, args: list[str], *,
-                             env: Environment,
+                             env: Environment | InvocationEnvironment | None,
                              cwd: str | Path | None,
                              ) -> ProcessBase:
         raise NotImplementedError()
