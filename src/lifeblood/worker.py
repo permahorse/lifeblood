@@ -1,6 +1,7 @@
 from .config import Config
 from .enums import WorkerType, ProcessPriorityAdjustment
 from .net_messages.address import AddressChain
+from .resource_probe import ResourceProbeProviderBase
 from .worker_core import WorkerCore
 from .worker_message_processor import WorkerMessageProcessor
 from .worker_invocation_protocol import WorkerInvocationProtocolHandlerV10, WorkerInvocationServerProtocol
@@ -13,6 +14,7 @@ class Worker(WorkerCore):
                  child_priority_adjustment: ProcessPriorityAdjustment = ProcessPriorityAdjustment.NO_CHANGE,
                  worker_type: WorkerType = WorkerType.STANDARD,
                  config: Optional[Config] = None,  # TODO: this should be replaced with config provider with a fixed interface
+                 hardware_probe_provider: ResourceProbeProviderBase | None = None,
                  singleshot: bool = False,
                  scheduler_ping_interval: float = 10,
                  scheduler_ping_miss_threshold: int = 6,
@@ -24,6 +26,7 @@ class Worker(WorkerCore):
             child_priority_adjustment=child_priority_adjustment,
             worker_type=worker_type,
             config=config,
+            hardware_probe_provider=hardware_probe_provider,
             singleshot=singleshot,
             scheduler_ping_interval=scheduler_ping_interval,
             scheduler_ping_miss_threshold=scheduler_ping_miss_threshold,
