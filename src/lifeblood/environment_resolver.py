@@ -22,7 +22,7 @@ from copy import deepcopy
 from semantic_version import Version, SimpleSpec
 from types import MappingProxyType
 
-from lifeblood.impl.TrivialAsyncioProcessContainer import TrivialAsyncioProcessContainer, \
+from lifeblood.impl.trivial_asyncio_process_container import TrivialAsyncioProcessContainer, \
     TrivialAsyncioProcessContainerFactory
 from lifeblood.process_container import ProcessContainerBase, ProcessContainerFactoryBase
 from . import logging
@@ -125,9 +125,6 @@ class EnvironmentResolverArguments:
 
 
 class BaseEnvironmentResolver:
-    def __init__(self, process_container_factory: ProcessContainerFactoryBase):
-        self.__process_container_factory = process_container_factory
-
     async def get_environment(self, arguments: Mapping) -> "Environment":
         """
         this is the main reason for environment wrapper's existance.
@@ -138,8 +135,17 @@ class BaseEnvironmentResolver:
         """
         raise NotImplementedError()
 
+    async def create_container(self,
+                               arguments: Mapping,
+                               resources_to_use: InvocationResources,
+                               ) -> ProcessContainerBase:
+        raise NotImplementedError()
+
 
 class BaseSimpleProcessSpawnEnvironmentResolver(BaseEnvironmentResolver):
+    def __init__(self, process_container_factory: ProcessContainerFactoryBase):
+        self.__process_container_factory = process_container_factory
+
     async def _resolve_environment_for_process_creation(self,
                              arguments: Mapping,
                              extra_env: Union[InvocationEnvironment, Environment, None] = None) -> Environment:
@@ -147,6 +153,15 @@ class BaseSimpleProcessSpawnEnvironmentResolver(BaseEnvironmentResolver):
         if extra_env:
             env = extra_env.resolve(base_env=env)
         return env
+
+    async def create_container(self,
+                               arguments: Mapping,
+                               resources_to_use: InvocationResources,
+                               ) -> ProcessContainerBase:
+        return await self.__process_container_factory.create_process_container(
+            resources_to_use,
+            await self.get_environment(arguments),
+        )
 
 
 class TrivialEnvironmentResolver(BaseSimpleProcessSpawnEnvironmentResolver):
