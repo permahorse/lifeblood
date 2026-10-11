@@ -92,6 +92,7 @@ class WorkerCore:
         self.__scheduler_db_uid: int = 0  # unsigned 64bit int
         self.__running_process: Optional[ProcessBase] = None
         self.__running_process_container: Optional[ProcessContainerBase] = None
+        self.__awaiter_aborted_event = asyncio.Event()
         self.__running_process_start_time: float = 0
         self.__running_task: Optional[Invocation] = None
         self.__running_task_progress: Optional[float] = None
@@ -497,6 +498,7 @@ class WorkerCore:
         stderr_path = self.get_log_filepath('error', self.__running_task.invocation_id())
         os.makedirs(os.path.dirname(stdout_path), exist_ok=True)
         os.makedirs(os.path.dirname(stderr_path), exist_ok=True)
+        self.__awaiter_aborted_event.clear()
         async with aiofiles.open(stdout_path, 'wb') as stdout:
             async with aiofiles.open(stderr_path, 'wb') as stderr:
                 async def _flush():
@@ -517,9 +519,11 @@ class WorkerCore:
                     rout_task = asyncio.create_task(self.__running_process.stdout().readline())
                     rerr_task = asyncio.create_task(self.__running_process.stderr().readline())
                     done_task = asyncio.create_task(self.__running_process.wait())
+                    abort_task = asyncio.create_task(self.__awaiter_aborted_event.wait())
                     flush_task = asyncio.create_task(_flush())
-                    tasks_to_wait = {rout_task, rerr_task, done_task, flush_task}
-                    while len(tasks_to_wait) != 0:
+                    tasks_to_wait = {rout_task, rerr_task, done_task, flush_task, abort_task}
+                    aborted = False
+                    while len(tasks_to_wait) != 0 and tasks_to_wait != {abort_task}:
                         done, tasks_to_wait = await asyncio.wait(tasks_to_wait, return_when=asyncio.FIRST_COMPLETED)
                         if rout_task in done:
                             buff_line = rout_task.result()
@@ -567,9 +571,19 @@ class WorkerCore:
                         if flush_task in done and not done_task.done():
                             flush_task = asyncio.create_task(_flush())
                             tasks_to_wait.add(flush_task)
-                    assert done_task.done()
-                    exit_code = done_task.result()
-                    await stdout.write((datetime.datetime.now().strftime('[SYS][%d.%m.%y %H:%M:%S]') + f' task finished with code {exit_code}\n').encode('UTF-8'))
+
+                        if abort_task in done and not done_task.done():
+                            aborted = True
+                            await stdout.write((datetime.datetime.now().strftime(
+                                '\n[WORKER][%d.%m.%y %H:%M:%S] ') + 'kill signal sent.\n').encode('UTF-8'))
+
+                    if aborted:
+                        assert abort_task.done()
+                        await stdout.write((datetime.datetime.now().strftime('\n[WORKER][%d.%m.%y %H:%M:%S] ') + 'killed by worker.\n').encode('UTF-8'))
+                    else:
+                        assert done_task.done()
+                        exit_code = done_task.result()
+                        await stdout.write((datetime.datetime.now().strftime('[SYS][%d.%m.%y %H:%M:%S]') + f' task finished with code {exit_code}\n').encode('UTF-8'))
                 except asyncio.CancelledError:
                     self.__logger.debug('task awaiter was cancelled')
                     for task in tasks_to_wait:
@@ -578,6 +592,9 @@ class WorkerCore:
                 finally:
                     # safer to wait for existing progress reporting task than cancel it
                     #  as cancelling may disrupt network protocol and cause timeout waiting on scheduler side
+                    if not abort_task.done():
+                        abort_task.cancel()
+
                     if progress_reporting_task is not None:
                         try:
                             await progress_reporting_task
@@ -586,6 +603,7 @@ class WorkerCore:
                         except Exception as e:
                             self.__logger.warning('failed report invocation progress, unexpected error: %s', e)
                         progress_reporting_task = None
+
                     # report to the pool
                     if self.__worker_id is not None:
                         try:
@@ -597,7 +615,7 @@ class WorkerCore:
                             self.stop()
 
         await self.__running_process.wait()
-        await self.task_finished()
+        await self.__task_finished(aborted)
 
     async def __helper_report_progress(self, invocation_id: int, progress: float):
         with SchedulerWorkerControlClient.get_scheduler_control_client(self.__where_to_report, self.__message_processor) as client:  # type: SchedulerWorkerControlClient
@@ -704,71 +722,13 @@ class WorkerCore:
             if self.__running_process is None:
                 return
             self.__logger.info('cancelling running task')
-            self.__running_awaiter.cancel()
-            cancelling_awaiter = self.__running_awaiter
-            self.__running_awaiter = None
-
             self.__running_process.kill()
-            await self.__running_process.wait()
-
-            self.__running_task.finish(None, time.time() - self.__running_process_start_time)
-
-            # start destroying container before reporting
-            self.__running_process_container.destroy()
-            # report to scheduler that cancel was a success
-            self.__logger.info(f'reporting cancel back to {self.__where_to_report}')
-
-            proc_stdout_filepath = self.get_log_filepath('output', self.__running_task.invocation_id())
-            proc_stderr_filepath = self.get_log_filepath('error', self.__running_task.invocation_id())
-
-            # we want to append worker's message that job was killed
-            try:
-                message = datetime.datetime.now().strftime('\n[WORKER][%d.%m.%y %H:%M:%S] ').encode('UTF-8') + b'killed by worker.\n'
-                async with aiofiles.open(proc_stdout_filepath, 'ab') as stdout, \
-                           aiofiles.open(proc_stderr_filepath, 'ab') as stderr:
-                    await asyncio.gather(
-                        stderr.write(message),
-                        stdout.write(message)
-                    )
-            except Exception as e:
-                self.__logger.warning("failed to append worker message to the logs")
-
-            try:
-                with SchedulerWorkerControlClient.get_scheduler_control_client(self.__where_to_report, self.__message_processor) as client:  # type: SchedulerWorkerControlClient
-                    await client.report_task_canceled(self.__running_task,
-                                                      proc_stdout_filepath,
-                                                      proc_stderr_filepath)
-            except Exception as e:
-                self.__logger.exception(f'could not report cuz of {e}')
-            except:
-                self.__logger.exception('could not report cuz i have no idea')
-            # end reporting
-            self.__logger.debug(f'done reporting done back to {self.__where_to_report}')
-
-            try:
-                await self.delete_logs(self.__running_task.invocation_id())
-            except OSError:
-                self.__logger.exception("failed to delete logs, ignoring")
-
-            # now wait till container is destroyed
-            await self.__running_process_container.wait()
-            self.__running_task = None
-            self.__worker_task_comm_queues = {}
-            self.__running_process = None
-            self.__where_to_report = None
-            self.__running_task_progress = None
-            await self._cleanup_extra_files()
-
-            await asyncio.wait((cancelling_awaiter,))  # ensure everything is done before we proceed
-
-            # stop ourselves if we are a small task helper
-            if self.__singleshot:
-                self.stop()
+            self.__awaiter_aborted_event.set()
 
     def task_status(self) -> Optional[float]:
         return self.__running_task_progress
 
-    async def task_finished(self):
+    async def __task_finished(self, was_aborted: bool):
         """
         is called when current process finishes
         :return:
@@ -776,9 +736,12 @@ class WorkerCore:
         async with self.__task_changing_state_lock, event_set_context(self.__task_switching_event):
             self.__logger.debug('task_finished: task_change_state locks acquired')
             if self.__running_process is None:
-                self.__logger.warning('task_finished called, but there is no running task. This can only normally happen if a task_cancel happened the same moment as finish.')
+                self.__logger.warning('task_finished called, but there is no running task')
                 return
-            self.__logger.info('task finished')
+            if was_aborted:
+                self.__logger.info('task aborted')
+            else:
+                self.__logger.info('task finished')
             process_exit_code = await self.__running_process.wait()
             self.__running_task.finish(process_exit_code, time.time() - self.__running_process_start_time)
 
@@ -788,15 +751,20 @@ class WorkerCore:
             self.__logger.info(f'reporting done back to {self.__where_to_report}')
             try:
                 with SchedulerWorkerControlClient.get_scheduler_control_client(self.__where_to_report, self.__message_processor) as client:  # type: SchedulerWorkerControlClient
-                    await client.report_task_done(self.__running_task,
-                                                  self.get_log_filepath('output', self.__running_task.invocation_id()),
-                                                  self.get_log_filepath('error', self.__running_task.invocation_id()))
+                    if was_aborted:
+                        await client.report_task_canceled(self.__running_task,
+                                                      self.get_log_filepath('output', self.__running_task.invocation_id()),
+                                                      self.get_log_filepath('error', self.__running_task.invocation_id()))
+                    else:
+                        await client.report_task_done(self.__running_task,
+                                                      self.get_log_filepath('output', self.__running_task.invocation_id()),
+                                                      self.get_log_filepath('error', self.__running_task.invocation_id()))
             except Exception as e:
                 self.__logger.exception(f'could not report cuz of {e}')
             except:
                 self.__logger.exception('could not report cuz i have no idea')
             # end reporting
-            self.__logger.debug(f'done reporting done back to {self.__where_to_report}')
+            self.__logger.debug(f'done reporting done/aborted back to {self.__where_to_report}')
 
             try:
                 await self.delete_logs(self.__running_task.invocation_id())
