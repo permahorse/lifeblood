@@ -32,9 +32,12 @@ class WorkerPingHandler(PingGenericHandler):
             pstatus = WorkerPingReply.IDLE.value
             pvalue = 0
 
+        resource_usage = self.__worker.last_passive_probe_results()
+
         return {
             'status': pstatus,
-            'progress': pvalue,
+            'progress': pvalue,  # unused
+            'resource_probe_result':  [[d.to_json_dict(), v] for d, v in resource_usage.items()] if resource_usage is not None else None,
         }
 
 
