@@ -66,7 +66,7 @@ class WorkerCore:
         self.__config = config or get_config('worker')
         self.__hardware_probe_provider = hardware_probe_provider
         self.__hardware_probes: list[ResourceProbeBase] = []
-        self.__last_passive_probe_results = []
+        self.__last_passive_probe_results = None
         self.__logger = logging.get_logger('worker')
         self.log_root_path: str = ''
         for self.log_root_path in (os.path.expandvars(self.__config.get_option_noasync('worker.logpath', log_path('invocations', 'worker', ensure_path_exists=False))),
@@ -619,7 +619,7 @@ class WorkerCore:
 
     async def __helper_report_progress(self, invocation_id: int, progress: float):
         with SchedulerWorkerControlClient.get_scheduler_control_client(self.__where_to_report, self.__message_processor) as client:  # type: SchedulerWorkerControlClient
-            await client.report_invocation_progress(invocation_id, progress)
+            await client.report_invocation_progress(invocation_id, progress, self.last_passive_probe_results())
 
     def is_task_running(self) -> bool:
         return self.__running_task is not None
@@ -829,7 +829,9 @@ class WorkerCore:
                 await exit_wait
                 break
             self.__last_passive_probe_results = await self.probe_resources()
-            print(self.__last_passive_probe_results)
+
+    def last_passive_probe_results(self) -> dict[WorkerResourceDefinition, WorkerResourceValue] | None:
+        return self.__last_passive_probe_results
 
     #
     # simply ping scheduler once in a while
