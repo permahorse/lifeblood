@@ -4,8 +4,9 @@ from io import BytesIO
 from lifeblood.enums import TaskState, WorkerType, WorkerState, TaskGroupArchivedState
 from lifeblood.buffered_connection import BufferedReaderWrapper
 from lifeblood.worker_metadata import WorkerMetadata
+from lifeblood.worker_resource_definition import WorkerResourceDataType
 from lifeblood.ui_protocol_data import UiData, NodeGraphStructureData, \
-    NodeData, NodeConnectionData, TaskBatchData, TaskData, WorkerData, WorkerResources, WorkerResource, WorkerResourceType, \
+    NodeData, NodeConnectionData, TaskBatchData, TaskData, WorkerData, WorkerResources, WorkerResource, \
     WorkerBatchData, TaskGroupData, TaskGroupStatisticsData, TaskGroupBatchData, TaskDelta, WorkerDevice, WorkerDeviceResource
 from lifeblood.ui_events import TasksChanged, TasksUpdated, TasksRemoved, TaskFullState, TaskEvent
 
@@ -32,15 +33,15 @@ class Tests(TestCase):
             }, {
                 1928374: WorkerResources(
                     [
-                        WorkerResource(12.3, 23.4, WorkerResourceType.FLOAT, 'cpu_count'),
-                        WorkerResource(929283838, 939384848, WorkerResourceType.INT, 'cpu_mem'),
-                        WorkerResource(56.7, 67.8, WorkerResourceType.FLOAT, 'gpu_count'),
-                        WorkerResource(84847575, 85857676, WorkerResourceType.INT, 'gpu_mem'),
+                        WorkerResource(12.3, 23.4, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT, 'cpu_count'),
+                        WorkerResource(929283838, 939384848, WorkerResourceDataType.MEMORY_BYTES, 'cpu_mem'),
+                        WorkerResource(56.7, 67.8, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT, 'gpu_count'),
+                        WorkerResource(84847575, 85857676, WorkerResourceDataType.MEMORY_BYTES, 'gpu_mem'),
                     ],
                     [
                         WorkerDevice('footype', 'dename', True, [
-                            WorkerDeviceResource(12.21, WorkerResourceType.FLOAT, 'lompas'),
-                            WorkerDeviceResource(55, WorkerResourceType.INT, 'wompas')
+                            WorkerDeviceResource(12.21, WorkerResourceDataType.GENERIC_FLOAT, 'lompas'),
+                            WorkerDeviceResource(55, WorkerResourceDataType.GENERIC_INT, 'wompas')
                         ])
                     ]
                 ),
