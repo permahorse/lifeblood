@@ -24,8 +24,8 @@ class TrivialProcessContainer(ProcessContainerBase):
             if isinstance(env, InvocationEnvironment):
                 env = env.resolve(self.__base_env)
             final_env.update(env)
-        assert isinstance(env, Environment)
-        proc = await self._inner_create_process(args, env=env, cwd=cwd)
+        assert isinstance(final_env, Environment)
+        proc = await self._inner_create_process(args, env=final_env, cwd=cwd)
         self.__processes.append(proc)
         return proc
 
