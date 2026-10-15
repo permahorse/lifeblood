@@ -48,7 +48,7 @@ class WorkerCore:
                  child_priority_adjustment: ProcessPriorityAdjustment = ProcessPriorityAdjustment.NO_CHANGE,
                  worker_type: WorkerType = WorkerType.STANDARD,
                  config: Optional[Config] = None,  # TODO: this should be replaced with config provider with a fixed interface
-                 hardware_probe_provider: ResourceProbeProviderBase | None = None,
+                 hardware_probe_provider: ResourceProbeProviderBase,
                  singleshot: bool = False,
                  scheduler_ping_interval: float = 10,
                  scheduler_ping_miss_threshold: int = 6,
