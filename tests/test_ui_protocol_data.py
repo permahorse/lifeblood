@@ -28,7 +28,7 @@ class Tests(TestCase):
             }), WorkerBatchData(0, {
                 121: WorkerData(121,
                                 1928374, '127.1.2.333:blo', 1234567, WorkerState.BUSY, WorkerType.STANDARD,
-                                1534, 8273, 7573, 55.5, {"borker", "gorker"},
+                                1534, 8273, 7573, 55.5, {"borker", "gorker"}, [],
                                 WorkerMetadata("fooo"))
             }, {
                 1928374: WorkerResources(
