@@ -4,7 +4,7 @@ import os
 import unittest
 from typing import Mapping
 from unittest import mock
-from lifeblood.environment_resolver import StandardEnvironmentResolver, EnvironmentResolverArguments, BaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat
+from lifeblood.environment_resolver import StandardEnvironmentResolver, EnvironmentResolverArguments, BaseSimpleProcessSpawnEnvironmentResolver
 
 from lifeblood_client import environment_resolver as client_environment_resolver
 from lifeblood.invocationjob import Environment
@@ -231,52 +231,3 @@ class TestMainVsClientCompatibility(unittest.TestCase):
         self.assertEqual(client_envarg.serialize(), envarg.serialize())
 
 
-class TestBaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat(unittest.IsolatedAsyncioTestCase):
-    if oh_no_its_windows:
-        @staticmethod
-        def normalize_path(x: str):
-            """
-            stoopid windows...
-            """
-            x = x.lower()
-            if os.path.splitext(x)[1] != '.exe':
-                x += '.exe'
-            return x
-    else:
-        @staticmethod
-        def normalize_path(x: str):
-            return x
-
-    class BaseSimpleBlaBlaBlaTest(BaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat):
-        def __init__(self, base_env):
-            super().__init__()
-            self.__base_env = base_env
-
-        async def get_environment(self, arguments: Mapping) -> "Environment":
-            return Environment(self.__base_env)
-
-    async def test_create_process_no_python(self):
-        envres = TestBaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat.BaseSimpleBlaBlaBlaTest({})
-
-        with mock.patch('lifeblood.environment_resolver.create_process') as m:
-            await envres.create_process({}, ['python', '/foo/bar'])
-
-        self.assertTrue(m.called)
-
-        self.assertEqual(
-            self.normalize_path(sys.executable),
-            self.normalize_path(shutil.which(m.call_args[0][0][0], path=m.call_args[0][1].get('PATH', None)))
-        )
-
-    async def test_create_process_yes_python(self):
-        expected_python = Path(__file__).parent / 'data' / 'fake_bin' / 'python'
-        envres = TestBaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat.BaseSimpleBlaBlaBlaTest({'PATH': str(expected_python.parent)})
-
-        with mock.patch('lifeblood.environment_resolver.create_process') as m:
-            await envres.create_process({}, ['python', '/foo/bar'])
-
-        self.assertTrue(m.called)
-        self.assertEqual(
-            self.normalize_path(str(expected_python)),
-            self.normalize_path(shutil.which(m.call_args[0][0][0], path=m.call_args[0][1].get('PATH', None)))
-        )
