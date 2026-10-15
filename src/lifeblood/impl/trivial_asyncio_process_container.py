@@ -38,15 +38,6 @@ class TrivialAsyncioProcessContainer(TrivialProcessContainer):
                        env: Environment,
                        cwd: str | Path | None,
                        ) -> ProcessBase:
-        if os.path.isabs(args[0]):
-            bin_path = args[0]
-        else:
-            bin_path = shutil.which(args[0], path=env.get('PATH', ''))
-        if bin_path is None:
-            raise ProcessInitializationError(f'"{args[0]}" was not found. Check environment resolver arguments and system setup')
-
-        if cwd is None:
-            cwd = os.path.dirname(bin_path)
         #
         # This introduces path to sys.executable if no python is found in PATH, yet `python` is first arg in call_args
         #
@@ -56,6 +47,16 @@ class TrivialAsyncioProcessContainer(TrivialProcessContainer):
         #  So to simplify the life of smaller setup users, this hack was introduced.
         if args[0] in ('python', 'python.exe') and shutil.which(args[0], path=env.get('PATH', '')) is None:
             env.append('PATH', os.path.dirname(sys.executable))
+
+        if os.path.isabs(args[0]):
+            bin_path = args[0]
+        else:
+            bin_path = shutil.which(args[0], path=env.get('PATH', ''))
+        if bin_path is None:
+            raise ProcessInitializationError(f'"{args[0]}" was not found. Check environment resolver arguments and system setup')
+
+        if cwd is None:
+            cwd = os.path.dirname(bin_path)
 
         unwrapped_process = await create_process(args, env, str(cwd))
         proc = AsyncioProcess(self, unwrapped_process)
