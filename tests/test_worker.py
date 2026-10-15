@@ -67,7 +67,7 @@ class WorkerRunTest(RunningSchedulerTests):
             task_id=6492,
             resources_to_use=InvocationResources({}, {})
         )
-        with mock.patch('lifeblood.environment_resolver.create_process') as m, \
+        with mock.patch('lifeblood.impl.trivial_asyncio_process_container.create_process') as m, \
                 mock.patch('shutil.which') as sw:
             sw.return_value = os.path.join(os.getcwd(), 'arg0')
             m.side_effect = Moxecption('expected exception')
