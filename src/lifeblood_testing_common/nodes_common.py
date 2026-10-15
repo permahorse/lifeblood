@@ -11,6 +11,7 @@ from lifeblood.attribute_serialization import serialize_attributes_core, deseria
 from lifeblood.enums import TaskState
 from lifeblood.db_misc import sql_init_script
 from lifeblood.basenode import BaseNode
+from lifeblood.impl.trivial_asyncio_process_container import TrivialAsyncioProcessContainerFactory
 from lifeblood.nodethings import ProcessingResult
 from lifeblood.exceptions import NodeNotReadyToProcess
 from lifeblood.scheduler.scheduler import Scheduler
@@ -43,7 +44,7 @@ def create_node(node_type: str, node_name: str, scheduler, node_id):
 
 class FakeResolver(BaseSimpleProcessSpawnEnvironmentResolver):
     def __init__(self, path_to_bin: str):
-        super().__init__()
+        super().__init__(TrivialAsyncioProcessContainerFactory())
         self.__bin_path = Path(path_to_bin)
 
     async def get_environment(self, arguments: Mapping) -> Environment:
