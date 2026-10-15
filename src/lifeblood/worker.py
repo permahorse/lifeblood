@@ -1,12 +1,17 @@
 from .config import Config
 from .enums import WorkerType, ProcessPriorityAdjustment
 from .net_messages.address import AddressChain
-from .resource_probe import ResourceProbeProviderBase
+from .resource_probe import ResourceProbeProviderBase, ResourceProbeFactoryBase
 from .worker_core import WorkerCore
 from .worker_message_processor import WorkerMessageProcessor
 from .worker_invocation_protocol import WorkerInvocationProtocolHandlerV10, WorkerInvocationServerProtocol
 
 from typing import Optional
+
+
+class NoResourceProbeProvider(ResourceProbeProviderBase):
+    def get_all_probe_factories(self) -> tuple[ResourceProbeFactoryBase, ...]:
+        return ()
 
 
 class Worker(WorkerCore):
@@ -26,7 +31,7 @@ class Worker(WorkerCore):
             child_priority_adjustment=child_priority_adjustment,
             worker_type=worker_type,
             config=config,
-            hardware_probe_provider=hardware_probe_provider,
+            hardware_probe_provider=hardware_probe_provider if hardware_probe_provider else NoResourceProbeProvider(),
             singleshot=singleshot,
             scheduler_ping_interval=scheduler_ping_interval,
             scheduler_ping_miss_threshold=scheduler_ping_miss_threshold,
