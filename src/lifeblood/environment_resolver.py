@@ -168,6 +168,11 @@ class TrivialEnvironmentResolver(BaseSimpleProcessSpawnEnvironmentResolver):
     """
     trivial environment wrapper does nothing
     """
+    def __init__(self):
+        super().__init__(
+            TrivialAsyncioProcessContainerFactory(),
+        )
+
     async def get_environment(self, arguments: Mapping) -> "Environment":
         env = Environment(os.environ)
         for key, value in arguments.items():
