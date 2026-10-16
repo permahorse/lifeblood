@@ -1,10 +1,8 @@
-import shutil
-import sys
 import os
 import unittest
-from typing import Mapping
 from unittest import mock
-from lifeblood.environment_resolver import StandardEnvironmentResolver, EnvironmentResolverArguments, BaseSimpleProcessSpawnEnvironmentResolver
+from lifeblood.environment_resolver import EnvironmentResolverArguments
+from lifeblood.impl.standard_environment_resolver import StandardEnvironmentResolver
 
 from lifeblood_client import environment_resolver as client_environment_resolver
 from lifeblood.invocationjob import Environment

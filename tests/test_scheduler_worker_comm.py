@@ -7,6 +7,7 @@ import time
 import sqlite3
 import logging
 
+from lifeblood.environment_resolver import EnvironmentResolverProviderBase, BaseEnvironmentResolver
 from lifeblood.worker import Worker
 from lifeblood.invocationjob import Invocation, InvocationJob, InvocationResources
 from lifeblood.taskspawn import NewTask
@@ -15,6 +16,7 @@ from lifeblood.db_misc import sql_init_script
 from lifeblood.logging import set_default_loglevel
 from lifeblood.net_messages.address import AddressChain
 from lifeblood_testing_common.common import create_default_scheduler
+from lifeblood.impl.trivial_environment_resolver import TrivialEnvironmentResolver
 
 from typing import Awaitable, Callable, List, Optional, Tuple
 
@@ -27,6 +29,13 @@ def purge_db():
     with sqlite3.connect('test_swc.db') as con:
         con.executescript(sql_init_script)
     con.close()
+
+
+class TrivialEnvironmentResolverProvider(EnvironmentResolverProviderBase):
+    def get_resolver(self, name: str) -> BaseEnvironmentResolver:
+        if name != 'TrivialEnvironmentResolver':
+            raise RuntimeError('only TrivialEnvironmentResolver is available for this test')
+        return TrivialEnvironmentResolver()
 
 
 class SchedulerWorkerCommSameProcess(IsolatedAsyncioTestCase):
@@ -47,7 +56,7 @@ class SchedulerWorkerCommSameProcess(IsolatedAsyncioTestCase):
         sched = create_default_scheduler('test_swc.db', do_broadcasting=False, helpers_minimal_idle_to_ensure=0)
         await sched.start()
 
-        worker = Worker(sched.server_message_addresses()[0])
+        worker = Worker(sched.server_message_addresses()[0], environment_resolver_provider=TrivialEnvironmentResolverProvider())
         await worker.start()
 
         await asyncio.gather(sched.wait_till_starts(),
@@ -305,7 +314,7 @@ class SchedulerWorkerCommSameProcess(IsolatedAsyncioTestCase):
 
         workers = []
         for i in range(worker_count):
-            worker = Worker(sched.server_message_addresses()[0])
+            worker = Worker(sched.server_message_addresses()[0], environment_resolver_provider=TrivialEnvironmentResolverProvider())
             await worker.start()
             workers.append(worker)
 
@@ -350,7 +359,11 @@ class SchedulerWorkerCommSameProcess(IsolatedAsyncioTestCase):
         sched = create_default_scheduler('test_swc.db', do_broadcasting=False, helpers_minimal_idle_to_ensure=0)
         await sched.start()
 
-        worker = Worker(sched.server_message_addresses()[0], scheduler_ping_interval=999)  # huge ping interval to prevent pinger from interfering with the test
+        worker = Worker(
+            sched.server_message_addresses()[0],
+            scheduler_ping_interval=999,  # huge ping interval to prevent pinger from interfering with the test
+            environment_resolver_provider=TrivialEnvironmentResolverProvider(),
+        )
         await worker.start()
         self.assertTrue(sched.is_started())
         self.assertTrue(worker.is_started())
