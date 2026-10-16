@@ -55,10 +55,20 @@ Number = Union[int, float]
 
 @dataclass
 class HardwareResource:
+    """
+    Represents a hardware resource.
+    It represents what a hardware is capable of, and NOT the current state of the resource usage
+    so, 64 GB of ram installed in a machine - it is a HardwareResource, no matter how that resource is currently used and by whom
+    """
     value: Number
 
 
 class HardwareResources:
+    """
+    Represents a set of HardwareResources and Devices of a single piece of equipment
+    the key in resource dict and device name in devices correspond to WorkerResourceDefinition and WorkerDeviceDefinition
+     but there is no clear connection here, which is kida a design flaw
+    """
     __resource_epsilon = 1e-5
 
     def __init__(self, *, hwid: Optional[int] = None, devices: Optional[Iterable[Tuple[str, str, Dict[str, Number]]]] = None, resources: Optional[Dict[str, Number]] = None):

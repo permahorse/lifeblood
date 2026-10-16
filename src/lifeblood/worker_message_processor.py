@@ -32,9 +32,12 @@ class WorkerPingHandler(PingGenericHandler):
             pstatus = WorkerPingReply.IDLE.value
             pvalue = 0
 
+        resource_usage = self.__worker.last_passive_probe_results()
+
         return {
             'status': pstatus,
-            'progress': pvalue,
+            'progress': pvalue,  # unused
+            'resource_probe_result':  [[d.to_json_dict(), v] for d, v in resource_usage.items()] if resource_usage is not None else None,
         }
 
 
@@ -51,7 +54,8 @@ class WorkerCommandHandler(CommandMessageHandlerBase):
             'drop': self._command_drop,
             'status': self._command_status,
             'log': self._command_log,
-            'invocation_message': self._command_invocation_message
+            'invocation_message': self._command_invocation_message,
+            'probe_resources': self._command_probe_resources,
         }
 
     #
@@ -158,6 +162,18 @@ class WorkerCommandHandler(CommandMessageHandlerBase):
                 all_data = await f.read()  #TODO: what if there is binary crap somehow in the log?
                 result[key] = all_data
 
+        await client.send_message_as_json(result)
+
+    async def _command_probe_resources(self, args: dict, client: CommandJsonMessageClient, original_message: Message):
+        # for now, always probe all
+        resources = await self.__worker.probe_resources()
+        result = {
+            'status': resources is not None,
+        }
+        if resources is not None:
+            result['resources'] = [
+                [d.to_json_dict(), v] for d, v in resources.items()
+            ]
         await client.send_message_as_json(result)
 
     #
