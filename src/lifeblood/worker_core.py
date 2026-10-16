@@ -12,6 +12,7 @@ import datetime
 import time
 import tempfile
 from . import logging
+from .environment_resolver import EnvironmentResolverProviderBase, ResolutionImpossibleError
 from .nethelpers import get_addr_to, get_localhost, get_hostname
 from .hardware_resources import HardwareResources
 from .resource_probe import ResourceProbeProviderBase, ResourceProbeBase
@@ -23,7 +24,6 @@ from .worker_pool_message_processor_client import WorkerPoolControlClient
 from .invocationjob import Invocation, InvocationEnvironment
 from .config import get_config, Config
 from .misc import get_unique_machine_id
-from . import environment_resolver
 from .enums import WorkerType, WorkerState, ProcessPriorityAdjustment
 from .paths import log_path
 from .misc import event_set_context
@@ -48,6 +48,7 @@ class WorkerCore:
                  child_priority_adjustment: ProcessPriorityAdjustment = ProcessPriorityAdjustment.NO_CHANGE,
                  worker_type: WorkerType = WorkerType.STANDARD,
                  config: Optional[Config] = None,  # TODO: this should be replaced with config provider with a fixed interface
+                 environment_resolver_provider: EnvironmentResolverProviderBase,
                  hardware_probe_provider: ResourceProbeProviderBase,
                  singleshot: bool = False,
                  scheduler_ping_interval: float = 10,
@@ -66,6 +67,7 @@ class WorkerCore:
         self.__config = config or get_config('worker')
         self.__hardware_probe_provider = hardware_probe_provider
         self.__hardware_probes: list[ResourceProbeBase] = []
+        self.__environment_resolver_provider = environment_resolver_provider
         self.__last_passive_probe_results = None
         self.__logger = logging.get_logger('worker')
         self.log_root_path: str = ''
@@ -416,13 +418,13 @@ class WorkerCore:
 
             try:
                 if task.job_definition().environment_resolver_arguments() is None:
-                    resolver = environment_resolver.get_resolver(self.__config.get_option_noasync('default_env_wrapper.name', 'TrivialEnvironmentResolver'))
+                    resolver = self.__environment_resolver_provider.get_resolver(self.__config.get_option_noasync('default_env_wrapper.name', 'TrivialEnvironmentResolver'))
                     resolver_arguments = self.__config.get_option_noasync('default_env_wrapper.arguments', {})
                 else:
                     env_res_args = task.job_definition().environment_resolver_arguments()
-                    resolver = env_res_args.get_resolver()
+                    resolver = self.__environment_resolver_provider.get_resolver(env_res_args.name())
                     resolver_arguments = env_res_args.arguments()
-            except environment_resolver.ResolutionImpossibleError as e:
+            except ResolutionImpossibleError as e:
                 self.__logger.error(f'cannot run the task: Unable to resolve environment: {str(e)}')
                 raise
 
