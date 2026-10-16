@@ -5,6 +5,7 @@ import signal
 
 from lifeblood.impl.psutils_resource_probes import PsutilsResourceProbeFactory
 from lifeblood.resource_probe import ResourceProbeProviderBase, ResourceProbeFactoryBase
+from lifeblood.pluginloader import PluginEnvironmentResolverProvider
 from . import logging
 from .nethelpers import get_default_addr
 from .broadcasting import await_broadcast
@@ -128,6 +129,7 @@ async def main_async(config: Config,
                     child_priority_adjustment=child_priority_adjustment,
                     worker_type=worker_type,
                     config=config,
+                    environment_resolver_provider=PluginEnvironmentResolverProvider(),
                     hardware_probe_provider=HardwareProbeProvider(),
                     singleshot=singleshot,
                     worker_id=worker_id,
@@ -152,6 +154,7 @@ async def main_async(config: Config,
                     child_priority_adjustment=child_priority_adjustment,
                     worker_type=worker_type,
                     config=config,
+                    environment_resolver_provider=PluginEnvironmentResolverProvider(),
                     hardware_probe_provider=HardwareProbeProvider(),
                     singleshot=singleshot,
                     worker_id=worker_id,
