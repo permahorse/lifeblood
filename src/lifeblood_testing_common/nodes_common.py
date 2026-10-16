@@ -50,13 +50,13 @@ class FakeResolver(BaseSimpleProcessSpawnEnvironmentResolver):
     async def get_environment(self, arguments: Mapping) -> Environment:
         bin_path = arguments['__bin_path']
         return Environment({**os.environ,
-                            'PATH': os.pathsep.join((str(self.__bin_path), os.environ.get('PATH', ''))),
+                            'PATH': os.pathsep.join((str(bin_path), os.environ.get('PATH', ''))),
                             'PYTHONUNBUFFERED': '1'})
 
 
 class FakeEnvArgs(EnvironmentResolverArguments):
-    def __init__(self, path_to_bin: str):
-        super().__init__(arguments={'__bin_path': path_to_bin})
+    def __init__(self, path_to_bin: str | Path):
+        super().__init__('FakeResolver', arguments={'__bin_path': str(path_to_bin)})
 
 
 class FakeResolverProvider(EnvironmentResolverProviderBase):
