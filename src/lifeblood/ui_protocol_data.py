@@ -641,7 +641,7 @@ class TaskGroupStatisticsData(IBufferSerializable):
             self.last_finish is not None,
             self.last_finish or 0,
             self.total_runtime is not None,
-            self.total_runtime or 0,
+            max(self.total_runtime or 0, 0),
         ))
 
     @classmethod
