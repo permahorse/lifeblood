@@ -251,7 +251,7 @@ CREATE TRIGGER IF NOT EXISTS update_invocations_inprog_time
 AFTER UPDATE OF "state" ON "invocations" WHEN old.state != {invoc_inprog_state} AND new.state == {invoc_inprog_state}
 BEGIN
 	UPDATE "invocations" SET inprog_time = {unixepoch_func} WHERE "id" == new.id;
-	UPDATE "task_group_attributes" SET "stat_min_invoc_start_time" = MIN("stat_min_invoc_start_time", (SELECT inprog_time FROM "invocations" WHERE "id" == new.id))
+	UPDATE "task_group_attributes" SET "stat_min_invoc_start_time" = MIN(IFNULL("stat_min_invoc_start_time", 999999999999), (SELECT inprog_time FROM "invocations" WHERE "id" == new.id))
 	    WHERE "group" IN (SELECT "group" FROM task_groups WHERE task_id == new.task_id);
 END;
 
@@ -259,7 +259,7 @@ CREATE TRIGGER IF NOT EXISTS update_invocations_finish_time
 AFTER UPDATE OF "state" ON "invocations" WHEN old.state != {invoc_finish_state} AND new.state == {invoc_finish_state} 
 BEGIN
 	UPDATE "invocations" SET finish_time = {unixepoch_func} WHERE "id" == new.id;
-	UPDATE "task_group_attributes" SET "stat_max_invoc_end_time" = MAX("stat_max_invoc_end_time", (SELECT finish_time FROM "invocations" WHERE "id" == new.id))
+	UPDATE "task_group_attributes" SET "stat_max_invoc_end_time" = MAX(IFNULL("stat_max_invoc_end_time", 0), (SELECT finish_time FROM "invocations" WHERE "id" == new.id))
 	    WHERE "group" IN (SELECT "group" FROM task_groups WHERE task_id == new.task_id);
 END;
 
