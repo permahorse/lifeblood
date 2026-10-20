@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import os
 import shutil
@@ -6,7 +7,7 @@ from lifeblood import logging
 from lifeblood.impl.asyncio_process import AsyncioProcess
 from lifeblood.process_container import ProcessBase, ProcessContainerBase, ProcessContainerFactoryBase
 from lifeblood.invocationjob import Environment, InvocationResources
-from lifeblood.process_utils import create_process
+from lifeblood.process_utils import create_process, kill_process_tree
 from lifeblood.exceptions import ProcessInitializationError
 
 from .trivial_process_container import TrivialProcessContainer
@@ -34,6 +35,11 @@ class TrivialAsyncioProcessContainerFactory(ProcessContainerFactoryBase):
 
 
 class TrivialAsyncioProcessContainer(TrivialProcessContainer):
+    def __init__(self, base_environment: Environment):
+        super().__init__(base_environment)
+        self.__destroyed = asyncio.Event()
+        self.__kill_tasks = []
+
     async def _inner_create_process(self, args: list[str], *,
                        env: Environment,
                        cwd: str | Path | None,
@@ -62,3 +68,18 @@ class TrivialAsyncioProcessContainer(TrivialProcessContainer):
         proc = AsyncioProcess(self, unwrapped_process)
         return proc
 
+    def destroy(self):
+        if self.__destroyed.is_set():
+            return
+        processes = [p for p in self.root_processes() if p.is_running()]
+        for proc in processes:
+            assert isinstance(proc, AsyncioProcess)
+            if not proc.is_running():
+                continue
+            self.__kill_tasks.append(asyncio.create_task(kill_process_tree(proc.get_wrapped_process())))
+        self.__destroyed.set()
+
+    async def wait(self):
+        await self.__destroyed.wait()
+        if self.__kill_tasks:
+            await asyncio.wait(self.__kill_tasks)
