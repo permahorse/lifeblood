@@ -1,3 +1,5 @@
+from typing import Iterable
+
 import asyncio
 from pathlib import Path
 from lifeblood.process_container import ProcessBase, ProcessContainerBase
@@ -12,6 +14,12 @@ class TrivialProcessContainer(ProcessContainerBase):
         self.__started = asyncio.Event()
         self.__destroyed = asyncio.Event()
         self.__kill_tasks = []
+
+    async def all_processes(self) -> Iterable[ProcessBase]:
+        """
+        trivial container does not properly implement this function, as it misses all children
+        """
+        return tuple(self.__processes)
 
     async def create_process(self, args: list[str], *,
                        env: Environment | InvocationEnvironment | None,
@@ -46,3 +54,6 @@ class TrivialProcessContainer(ProcessContainerBase):
 
         if self.__processes:
             await asyncio.gather(*(x.wait() for x in self.__processes))
+
+    def root_processes(self) -> tuple[ProcessBase, ...]:
+        return tuple(self.__processes)
