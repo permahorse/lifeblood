@@ -1,6 +1,8 @@
 from __future__ import annotations
 from pathlib import Path
 from asyncio import streams
+from typing import Iterable
+
 from lifeblood.invocationjob import InvocationEnvironment, Environment, InvocationResources
 
 
@@ -23,6 +25,13 @@ class ProcessContainerBase:
                              env: Environment | InvocationEnvironment | None,
                              cwd: str | Path | None,
                              ) -> ProcessBase:
+        raise NotImplementedError()
+
+    def all_processes(self) -> Iterable[ProcessBase]:
+        """
+        Returns all processes ran in container that are processes created with create_process, or descendants of those
+        If a container creates auxiliary helper processes - those should NOT be returned by this
+        """
         raise NotImplementedError()
 
     def destroy(self):
