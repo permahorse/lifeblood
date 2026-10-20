@@ -15,7 +15,10 @@ class WorkerResourceDataType(Enum):
     MEMORY_BYTES = 3
 
 
-@dataclass
+WorkerResourceValue = int | float
+
+
+@dataclass(frozen=True)
 class WorkerResourceDefinition:
     name: str
     type: WorkerResourceDataType

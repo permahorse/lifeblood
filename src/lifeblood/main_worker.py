@@ -2,6 +2,10 @@ import asyncio
 import json
 import os.path
 import signal
+
+from lifeblood.impl.psutils_resource_probes import PsutilsResourceProbeFactory
+from lifeblood.resource_probe import ResourceProbeProviderBase, ResourceProbeFactoryBase
+from lifeblood.pluginloader import PluginEnvironmentResolverProvider
 from . import logging
 from .nethelpers import get_default_addr
 from .broadcasting import await_broadcast
@@ -43,6 +47,13 @@ listen_to_broadcast = true
 # houdini_ocl = "GPU::0"
 # karma_dev = "0/1"
 '''
+
+
+class HardwareProbeProvider(ResourceProbeProviderBase):
+    def get_all_probe_factories(self) -> tuple[ResourceProbeFactoryBase, ...]:
+        return (
+            PsutilsResourceProbeFactory(),
+        )
 
 
 async def main_async(config: Config,
@@ -118,9 +129,11 @@ async def main_async(config: Config,
                     child_priority_adjustment=child_priority_adjustment,
                     worker_type=worker_type,
                     config=config,
+                    environment_resolver_provider=PluginEnvironmentResolverProvider(),
+                    hardware_probe_provider=HardwareProbeProvider(),
                     singleshot=singleshot,
                     worker_id=worker_id,
-                    pool_address=pool_address
+                    pool_address=pool_address,
                 )
                 await worker.start()  # note that server is already started at this point
             except Exception:
@@ -141,9 +154,11 @@ async def main_async(config: Config,
                     child_priority_adjustment=child_priority_adjustment,
                     worker_type=worker_type,
                     config=config,
+                    environment_resolver_provider=PluginEnvironmentResolverProvider(),
+                    hardware_probe_provider=HardwareProbeProvider(),
                     singleshot=singleshot,
                     worker_id=worker_id,
-                    pool_address=pool_address
+                    pool_address=pool_address,
                 )
                 await worker.start()  # note that server is already started at this point
             except ConnectionRefusedError as e:
@@ -164,13 +179,6 @@ async def main_async(config: Config,
 
 
 def main(argv):
-    # import signal
-    # prev = None
-    # def signal_handler(sig, frame):
-    #     print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! You pressed Ctrl+C !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-    #     prev(sig, frame)
-    #
-    # prev = signal.signal(signal.SIGINT, signal_handler)
     import argparse
     parser = argparse.ArgumentParser('lifeblood worker', description='executes invocations from scheduler')
     parser.add_argument('--scheduler-address', help='manually specify scheduler to connect to. if not specified - by default worker will start listening to broadcasts from schedulers')
