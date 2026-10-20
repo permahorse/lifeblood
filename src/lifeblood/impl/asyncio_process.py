@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import streams, subprocess, create_task
 from lifeblood.process_container import ProcessBase, ProcessContainerBase
 from lifeblood.process_utils import kill_process_tree
@@ -26,7 +27,6 @@ class AsyncioProcess(ProcessBase):
         if self.__kill_task:
             await self.__kill_task
 
-        self.__process._transport.close()  # sometimes not closed straight away transport ON EXIT may cause exceptions in __del__ that event loop is closed
         return ret
 
     def return_code(self) -> int | None:
@@ -38,5 +38,14 @@ class AsyncioProcess(ProcessBase):
         self.__kill_task = create_task(self.__kill())
 
     async def __kill(self):
-        await kill_process_tree(self.__process)
+        self.__process.terminate()
+        try:
+            await asyncio.wait_for(self.__process.wait(), 10)
+        except TimeoutError:
+            self.__process.kill()
 
+    def get_pid(self) -> int:
+        return self.__process.pid
+
+    def get_wrapped_process(self) -> asyncio.subprocess.Process:
+        return self.__process
