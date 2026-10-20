@@ -577,20 +577,15 @@ class WorkerCore:
                         if abort_task in done and not done_task.done():
                             aborted = True
                             await stdout.write((datetime.datetime.now().strftime(
-                                '\n[WORKER][%d.%m.%y %H:%M:%S] ') + 'kill signal sent.\n').encode('UTF-8'))
+                                '\n[SYS][%d.%m.%y %H:%M:%S] ') + 'kill signal sent.\n').encode('UTF-8'))
 
                     if aborted:
                         assert abort_task.done()
-                        await stdout.write((datetime.datetime.now().strftime('\n[WORKER][%d.%m.%y %H:%M:%S] ') + 'killed by worker.\n').encode('UTF-8'))
+                        await stdout.write((datetime.datetime.now().strftime('\n[SYS][%d.%m.%y %H:%M:%S] ') + 'killed by worker.\n').encode('UTF-8'))
                     else:
                         assert done_task.done()
                         exit_code = done_task.result()
                         await stdout.write((datetime.datetime.now().strftime('[SYS][%d.%m.%y %H:%M:%S]') + f' task finished with code {exit_code}\n').encode('UTF-8'))
-                except asyncio.CancelledError:
-                    self.__logger.debug('task awaiter was cancelled')
-                    for task in tasks_to_wait:
-                        task.cancel()
-                    raise
                 finally:
                     # safer to wait for existing progress reporting task than cancel it
                     #  as cancelling may disrupt network protocol and cause timeout waiting on scheduler side
@@ -605,16 +600,6 @@ class WorkerCore:
                         except Exception as e:
                             self.__logger.warning('failed report invocation progress, unexpected error: %s', e)
                         progress_reporting_task = None
-
-                    # report to the pool
-                    if self.__worker_id is not None:
-                        try:
-                            assert self.__pool_address is not None
-                            with WorkerPoolControlClient.get_worker_pool_control_client(self.__pool_address, self.__message_processor) as wpclient:  # type: WorkerPoolControlClient
-                                await wpclient.report_state(self.__worker_id, WorkerState.IDLE)
-                        except (Exception, asyncio.CancelledError):
-                            self.__logger.error('failed to report task cancellation to worker pool. stopping worker')
-                            self.stop()
 
         await self.__running_process.wait()
         await self.__task_finished(aborted)
@@ -749,6 +734,18 @@ class WorkerCore:
 
             # start destroying container before reporting
             self.__running_process_container.destroy()
+
+            # report to the pool
+            if self.__worker_id is not None:
+                try:
+                    assert self.__pool_address is not None
+                    with WorkerPoolControlClient.get_worker_pool_control_client(self.__pool_address,
+                                                                                self.__message_processor) as wpclient:  # type: WorkerPoolControlClient
+                        await wpclient.report_state(self.__worker_id, WorkerState.IDLE)
+                except Exception:
+                    self.__logger.error('failed to report task cancellation to worker pool. stopping worker')
+                    self.stop()
+
             # report to scheduler
             self.__logger.info(f'reporting done back to {self.__where_to_report}')
             try:
