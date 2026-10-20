@@ -8,6 +8,10 @@ class ProbeInitializationError(RuntimeError):
     pass
 
 
+class ContainerNotSupportedError(RuntimeError):
+    pass
+
+
 class ResourceProbeProviderBase:
     def get_all_probe_factories(self) -> tuple[ResourceProbeFactoryBase, ...]:
         raise NotImplementedError()
