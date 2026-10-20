@@ -27,7 +27,7 @@ class ProcessContainerBase:
                              ) -> ProcessBase:
         raise NotImplementedError()
 
-    def all_processes(self) -> Iterable[ProcessBase]:
+    async def all_processes(self) -> Iterable[ProcessBase]:
         """
         Returns all processes ran in container that are processes created with create_process, or descendants of those
         If a container creates auxiliary helper processes - those should NOT be returned by this
