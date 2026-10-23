@@ -734,6 +734,7 @@ class WorkerCore:
 
             # start destroying container before reporting
             self.__running_process_container.destroy()
+            self.__last_passive_probe_results = None
 
             # report to the pool
             if self.__worker_id is not None:
