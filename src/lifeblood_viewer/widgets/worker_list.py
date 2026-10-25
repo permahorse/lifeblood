@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from copy import copy
 from lifeblood.ui_protocol_data import WorkerData, WorkerBatchData, WorkerResources, WorkerMetadata, \
     ContainerResourceProbeResult
 from lifeblood.enums import WorkerType, WorkerState
@@ -14,12 +15,11 @@ from PySide6.QtWidgets import QWidget, QTreeView, QHBoxLayout, QVBoxLayout, QMen
 from PySide6.QtCore import Slot, Signal, Qt, QAbstractItemModel, QModelIndex, QPoint
 from PySide6.QtGui import QColor
 
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
-
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, OrderedDict
 
 _init_column_order_prototype = (
     'id', 'state', 'progress', 'task_id', 'metadata.hostname', 'last_address', 'last_seen', '__resources__',
-    'devices', 'groups', 'probes', 'worker_type',
+    'devices', 'probes', 'groups', 'worker_type',
 )
 
 
@@ -247,6 +247,7 @@ class WorkerModel(QAbstractItemModel):
         w_instate_count = 0
         w_total_count = 0
         summ_address = workers[0].last_address.rsplit('|', 1)[0] if len(workers) else 'unknown'
+        summ_probes = OrderedDict()
         for worker in workers:
             if worker.state == state:
                 w_instate_count += 1
@@ -255,6 +256,13 @@ class WorkerModel(QAbstractItemModel):
             # address
             if summ_address != worker.last_address.rsplit('|', 1)[0]:
                 summ_address = '<multiple>'
+            # probes
+            for prob_res in worker.container_probe_results:
+                if prob_res.name not in summ_probes:
+                    summ_probes[prob_res.name] = copy(prob_res)
+                else:
+                    # TODO: need to accumulate base on type
+                    summ_probes[prob_res.name].value += prob_res.value
 
 
         return WorkerModelData(
@@ -270,7 +278,7 @@ class WorkerModel(QAbstractItemModel):
             None,
             min(x.current_invocation_progress or 100 for x in workers) if len(workers) else None,
             workers[0].groups if len(workers) else (),
-            [],
+            list(summ_probes.values()),
             workers[0].metadata if len(workers) else None,
         )
     
@@ -279,7 +287,14 @@ class WorkerModel(QAbstractItemModel):
         if data_type == WorkerResourceDataType.MEMORY_BYTES or col_name.endswith('_mem') or col_name == 'mem':
             return nice_memory_formatting(raw)
         return raw
-    
+
+    @staticmethod
+    def _format_label(name: str):
+        return {
+            'cpu_load': '🖥',
+            'cpu_mem': '⛃',
+        }.get(name)
+
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
@@ -349,7 +364,7 @@ class WorkerModel(QAbstractItemModel):
                 return None
             return worker.type.name
         if col_name == 'probes':
-            return ', '.join(f'{x.name}:{self._format_display(x.label, x.value, data_type=x.type)}' for x in worker.container_probe_results)
+            return ', '.join(f'{self._format_label(x.name) or x.label}:{self._format_display(x.label, x.value, data_type=x.type)}' for x in worker.container_probe_results)
 
         raw_data = 'none'
         if col_name in self.__worker_resources_names:
