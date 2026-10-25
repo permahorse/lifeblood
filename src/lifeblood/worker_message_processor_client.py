@@ -8,6 +8,8 @@ from .net_messages.address import AddressChain
 
 from typing import Optional, Tuple
 
+from .worker_resource_definition import WorkerResourceDefinition, WorkerResourceValue
+
 
 class WorkerControlClient:
     def __init__(self, client: CommandJsonMessageClient):
@@ -51,6 +53,19 @@ class WorkerControlClient:
 
         reply = await (await self.__client.receive_message()).message_body_as_json()
         return str(reply['stdout']), str(reply['stderr'])
+
+    async def probe_resources(self) -> dict[WorkerResourceDefinition, WorkerResourceValue] | None:
+        # TODO: add argument of definition subset to probe
+        await self.__client.send_command('probe_resources', {})
+        reply = await (await self.__client.receive_message()).message_body_as_json()
+        if not reply.get('status'):
+            return None
+
+        ret = {}
+        for def_json, value in reply['resources']:
+            ret[WorkerResourceDefinition.from_json_dict(def_json)] = value
+
+        return ret
 
     async def send_invocation_message(self,
                                       destination_invocation_id: int,

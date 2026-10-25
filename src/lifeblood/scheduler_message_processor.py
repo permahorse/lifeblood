@@ -151,6 +151,10 @@ class SchedulerCommandHandler(CommandMessageHandlerBase):
         """
         invoc_id = args['invocation_id']
         progress = args['progress']
+        if probe_raw := args.get('resource_probe_result'):
+            wid = await self.__scheduler.worker_id_from_address(original_message.message_source())
+            if wid:
+                self.__scheduler.data_access.mem_cache_workers_state[wid]['resources_used_serialized'] = probe_raw
         self._logger.debug('command: update progress of %d to %f', invoc_id, progress)
         await self.__scheduler.update_invocation_progress(invoc_id, progress)
         await client.send_message_as_json({'ok': True})

@@ -11,6 +11,7 @@ from lifeblood.attribute_serialization import serialize_attributes_core, deseria
 from lifeblood.enums import TaskState
 from lifeblood.db_misc import sql_init_script
 from lifeblood.basenode import BaseNode
+from lifeblood.impl.trivial_asyncio_process_container import TrivialAsyncioProcessContainerFactory
 from lifeblood.nodethings import ProcessingResult
 from lifeblood.exceptions import NodeNotReadyToProcess
 from lifeblood.scheduler.scheduler import Scheduler
@@ -21,7 +22,8 @@ from lifeblood.scheduler.pinger import Pinger
 from lifeblood.pluginloader import PluginNodeDataProvider
 from lifeblood.processingcontext import ProcessingContext
 from lifeblood.process_utils import oh_no_its_windows
-from lifeblood.environment_resolver import EnvironmentResolverArguments, BaseSimpleProcessSpawnEnvironmentResolver
+from lifeblood.environment_resolver import EnvironmentResolverArguments, BaseSimpleProcessSpawnEnvironmentResolver, \
+    EnvironmentResolverProviderBase, BaseEnvironmentResolver
 
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
@@ -42,23 +44,26 @@ def create_node(node_type: str, node_name: str, scheduler, node_id):
 
 
 class FakeResolver(BaseSimpleProcessSpawnEnvironmentResolver):
-    def __init__(self, path_to_bin: str):
-        super().__init__()
-        self.__bin_path = Path(path_to_bin)
+    def __init__(self):
+        super().__init__(TrivialAsyncioProcessContainerFactory())
 
     async def get_environment(self, arguments: Mapping) -> Environment:
+        bin_path = arguments['__bin_path']
         return Environment({**os.environ,
-                            'PATH': os.pathsep.join((str(self.__bin_path), os.environ.get('PATH', ''))),
+                            'PATH': os.pathsep.join((str(bin_path), os.environ.get('PATH', ''))),
                             'PYTHONUNBUFFERED': '1'})
 
 
 class FakeEnvArgs(EnvironmentResolverArguments):
-    def __init__(self, path_to_bin: str):
-        super().__init__()
-        self.__bin_path = Path(path_to_bin)
+    def __init__(self, path_to_bin: str | Path):
+        super().__init__('FakeResolver', arguments={'__bin_path': str(path_to_bin)})
 
-    def get_resolver(self):
-        return FakeResolver(self.__bin_path)
+
+class FakeResolverProvider(EnvironmentResolverProviderBase):
+    def get_resolver(self, name: str) -> BaseEnvironmentResolver:
+        if name != 'FakeResolver':
+            raise RuntimeError('only FakeResolver is available for tests')
+        return FakeResolver()
 
 
 class PseudoTaskPool:
@@ -236,6 +241,7 @@ class TestCaseBase(IsolatedAsyncioTestCase):
             for i in range(worker_count):
                 worker = Worker(
                     sched.server_message_addresses()[0],
+                    environment_resolver_provider=FakeResolverProvider(),
                     scheduler_ping_interval=9001,
                 )
                 await worker.start()
