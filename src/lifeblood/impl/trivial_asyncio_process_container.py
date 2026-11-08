@@ -7,7 +7,7 @@ from lifeblood import logging
 from lifeblood.impl.asyncio_process import AsyncioProcess
 from lifeblood.process_container import ProcessBase, ProcessContainerBase, ProcessContainerFactoryBase
 from lifeblood.invocationjob import Environment, InvocationResources
-from lifeblood.process_utils import create_process, kill_process_tree
+from lifeblood.process_utils import create_process, kill_process_tree, oh_no_its_windows
 from lifeblood.exceptions import ProcessInitializationError
 
 from .trivial_process_container import TrivialProcessContainer
@@ -51,8 +51,11 @@ class TrivialAsyncioProcessContainer(TrivialProcessContainer):
         #  python to be available in run environment. User might want to have multiple versions of packaged python.
         #  However, simple one user artist might not care, and would just want python code to work without any packages setup.
         #  So to simplify the life of smaller setup users, this hack was introduced.
-        if args[0] in ('python', 'python.exe') and shutil.which(args[0], path=env.get('PATH', '')) is None:
-            env.append('PATH', os.path.dirname(sys.executable))
+        if args[0] in ('python', 'python3', 'python.exe'):
+            if shutil.which(args[0], path=env.get('PATH', '')) is None:
+                env.append('PATH', os.path.dirname(sys.executable))
+            if oh_no_its_windows and 'PYTHONUNBUFFERED' not in env:
+                env['PYTHONUNBUFFERED'] = '1'
 
         if os.path.isabs(args[0]):
             bin_path = args[0]
