@@ -64,7 +64,7 @@ def main(argv):
             return 1
         return main(cmd_argv)
     elif opts.command == 'resolver':
-        from .environment_resolver import main
+        from .main_environment_resolver import main
         return main(cmd_argv)
     return 2
 

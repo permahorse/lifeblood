@@ -6,7 +6,9 @@ from lifeblood.enums import WorkerType, WorkerState
 from lifeblood.hardware_resources import HardwareResources
 from lifeblood.worker import Worker
 from lifeblood.invocationjob import Invocation, InvocationJob, InvocationEnvironment, InvocationResources
-from lifeblood.environment_resolver import EnvironmentResolverArguments
+from lifeblood.environment_resolver import EnvironmentResolverArguments, BaseEnvironmentResolver, \
+    EnvironmentResolverProviderBase
+from lifeblood.impl.trivial_environment_resolver import TrivialEnvironmentResolver
 from lifeblood.net_messages.address import AddressChain
 from lifeblood.worker_metadata import WorkerMetadata
 from lifeblood_testing_common.common import create_default_scheduler
@@ -45,9 +47,19 @@ class Moxecption(Exception):
     pass
 
 
+class TrivialEnvironmentResolverProvider(EnvironmentResolverProviderBase):
+    def get_resolver(self, name: str) -> BaseEnvironmentResolver:
+        if name != 'TrivialEnvironmentResolver':
+            raise RuntimeError('only TrivialEnvironmentResolver is available for this test')
+        return TrivialEnvironmentResolver()
+
+
 class WorkerRunTest(RunningSchedulerTests):
     async def test_worker_run_task_env(self):
-        worker = Worker(AddressChain('127.0.0.1:12345'))
+        worker = Worker(
+            AddressChain('127.0.0.1:12345'),
+            environment_resolver_provider=TrivialEnvironmentResolverProvider(),
+        )
         # NOTE: we are testing on non-started worker...
         expected_env = InvocationEnvironment()
         expected_env.set_variable('qwe', 'rty')
@@ -67,7 +79,7 @@ class WorkerRunTest(RunningSchedulerTests):
             task_id=6492,
             resources_to_use=InvocationResources({}, {})
         )
-        with mock.patch('lifeblood.environment_resolver.create_process') as m, \
+        with mock.patch('lifeblood.impl.trivial_asyncio_process_container.create_process') as m, \
                 mock.patch('shutil.which') as sw:
             sw.return_value = os.path.join(os.getcwd(), 'arg0')
             m.side_effect = Moxecption('expected exception')
@@ -104,7 +116,10 @@ class WorkerRunTest(RunningSchedulerTests):
         self.assertNotIn('LBATTR_nodicts2', test_env)
 
     async def test_run_task_report(self):
-        worker = Worker(AddressChain('127.0.0.1:12345'))
+        worker = Worker(
+            AddressChain('127.0.0.1:12345'),
+            environment_resolver_provider=TrivialEnvironmentResolverProvider(),
+        )
         # NOTE: we are testing on non-started worker...
         job = InvocationJob(['echo', 'task run'])
         inv = Invocation(

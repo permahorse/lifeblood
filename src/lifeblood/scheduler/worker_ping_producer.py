@@ -11,6 +11,8 @@ from .scheduler_core import SchedulerCore
 
 from typing import Optional, Iterable
 
+from ..worker_resource_definition import WorkerResourceDefinition
+
 
 class WorkerPingEntity(PingEntity):
     def __init__(self, address: AddressChain, wid: int, state: WorkerState, last_checked: datetime):
@@ -169,6 +171,8 @@ class WorkerPingProducer(PingProducerBase):
 
         self.__data_access.mem_cache_workers_state[entity.worker_id()]['ping_state'] = WorkerPingState.WORKING.value
         self.__data_access.mem_cache_workers_state[entity.worker_id()]['last_seen'] = global_timestamp_int()
+        self.__data_access.mem_cache_workers_state[entity.worker_id()]['resources_used_serialized'] = reply_data.get('resource_probe_result', [])
+
         # if worker was in ERROR state - it's up to worker to reintroduce itself to reset all possible errors, we don't do it here
 
         self.__pinger_logger.debug('    :: %s', ping_code)

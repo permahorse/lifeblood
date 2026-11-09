@@ -7,8 +7,8 @@ from .buffered_connection import BufferedReader
 from .buffer_serializable import IBufferSerializable
 from .enums import TaskState, WorkerState, WorkerType, TaskGroupArchivedState, InvocationState
 from .worker_metadata import WorkerMetadata
+from .worker_resource_definition import WorkerResourceDataType
 from dataclasses import dataclass
-from enum import Enum
 
 from typing import Dict, List, Type, Optional, Set, Union
 
@@ -407,23 +407,18 @@ class NodeGraphStructureData(IBufferSerializable):
         return NodeGraphStructureData(db_uid, nodes, connections)
 
 
-class WorkerResourceType(Enum):
-    INT = 0
-    FLOAT = 1
-
-
 @dataclass
 class WorkerResource:
     value: Union[int, float]
     total: Union[int, float]
-    type: WorkerResourceType
+    type: WorkerResourceDataType
     name: str
 
 
 @dataclass
 class WorkerDeviceResource:
     value: Union[int, float]
-    type: WorkerResourceType
+    type: WorkerResourceDataType
     name: str
 
 
@@ -467,9 +462,9 @@ class WorkerResources(IBufferSerializable):
     def serialize(self, stream: BufferedIOBase):
         stream.write(struct.pack('>QQ', len(self.__resources), len(self.__devices)))
         for res in self.__resources:
-            if res.type == WorkerResourceType.INT:
+            if res.type in {WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES}:
                 s = 'Q'
-            elif res.type == WorkerResourceType.FLOAT:
+            elif res.type in {WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT}:
                 s = 'd'
             else:
                 raise NotImplementedError()
@@ -480,9 +475,9 @@ class WorkerResources(IBufferSerializable):
             _serialize_string(dev.name, stream)
             stream.write(struct.pack('>?Q', dev.available, len(dev.resources)))
             for res in dev.resources:
-                if res.type == WorkerResourceType.INT:
+                if res.type in {WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES}:
                     s = 'Q'
-                elif res.type == WorkerResourceType.FLOAT:
+                elif res.type in {WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT}:
                     s = 'd'
                 else:
                     raise NotImplementedError()
@@ -496,11 +491,11 @@ class WorkerResources(IBufferSerializable):
         num_res, num_dev = struct.unpack('>QQ', stream.readexactly(16))
         for i in range(num_res):
             res_type_val, = struct.unpack('>B', stream.readexactly(1))
-            res_type = WorkerResourceType(res_type_val)
-            if res_type == WorkerResourceType.INT:
+            res_type = WorkerResourceDataType(res_type_val)
+            if res_type in {WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES}:
                 s = 'Q'
                 ss = 8
-            elif res_type == WorkerResourceType.FLOAT:
+            elif res_type in {WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT}:
                 s = 'd'
                 ss = 8
             else:
@@ -515,11 +510,11 @@ class WorkerResources(IBufferSerializable):
             dev_res = []
             for i in range(num_res):
                 res_type_val, = struct.unpack('>B', stream.readexactly(1))
-                res_type = WorkerResourceType(res_type_val)
-                if res_type == WorkerResourceType.INT:
+                res_type = WorkerResourceDataType(res_type_val)
+                if res_type in {WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES}:
                     s = 'Q'
                     ss = 8
-                elif res_type == WorkerResourceType.FLOAT:
+                elif res_type in {WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT}:
                     s = 'd'
                     ss = 8
                 else:
@@ -530,6 +525,45 @@ class WorkerResources(IBufferSerializable):
             devices.append(WorkerDevice(dev_type, dev_name, dev_available, dev_res))
 
         return WorkerResources(resources, devices)
+
+
+@dataclass
+class ContainerResourceProbeResult(IBufferSerializable):
+    value: Union[int, float]
+    type: WorkerResourceDataType
+    name: str
+    label: str
+
+    def serialize(self, stream: BufferedIOBase):
+        if self.type in {WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES}:
+            s = 'Q'
+        elif self.type in {WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT}:
+            s = 'd'
+        else:
+            raise NotImplementedError()
+        stream.write(struct.pack(f'>B{s}', self.type.value, int(self.value) if s == 'Q' else float(self.value)))
+        _serialize_string(self.name, stream)
+        _serialize_string(self.label, stream)
+
+    @classmethod
+    def deserialize(cls, stream: BufferedReader):
+        res_type_val, = struct.unpack('>B', stream.readexactly(1))
+        res_type = WorkerResourceDataType(res_type_val)
+        if res_type in {WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES}:
+            s = 'Q'
+        elif res_type in {WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT}:
+            s = 'd'
+        else:
+            raise NotImplementedError()
+        res_val, = struct.unpack(f'>{s}', stream.readexactly(8))
+        res_name = _deserialize_string(stream)
+        res_label = _deserialize_string(stream)
+        return ContainerResourceProbeResult(
+            res_val,
+            res_type,
+            res_name,
+            res_label,
+        )
 
 
 @dataclass
@@ -545,20 +579,24 @@ class WorkerData(IBufferSerializable):
     current_invocation_id: Optional[int]
     current_invocation_progress: Optional[float]
     groups: Set[str]
+    container_probe_results: List[ContainerResourceProbeResult]
     metadata: Optional[WorkerMetadata]
 
     def serialize(self, stream: BufferedIOBase):
-        stream.write(struct.pack('>QQQII?Q?Q?Q?dQ?', self.id, self.hwid, self.last_seen_timestamp, self.state.value, self.type.value,
+        stream.write(struct.pack('>QQQII?Q?Q?Q?dQQ?', self.id, self.hwid, self.last_seen_timestamp, self.state.value, self.type.value,
                                  self.current_invocation_node_id is not None, self.current_invocation_node_id or 0,
                                  self.current_invocation_task_id is not None, self.current_invocation_task_id or 0,
                                  self.current_invocation_id is not None, self.current_invocation_id or 0,
                                  self.current_invocation_progress is not None, self.current_invocation_progress or 0.0,
                                  len(self.groups),
-                                 self.metadata is not None))
+                                 len(self.container_probe_results),
+                                 self.metadata is not None,
+                                 ))
         _serialize_string(self.last_address, stream)
         for group in self.groups:
             _serialize_string(group, stream)
-
+        for probe_result in self.container_probe_results:
+            probe_result.serialize(stream)
         # metadata
         if self.metadata is not None:
             _serialize_string(self.metadata.hostname, stream)
@@ -570,7 +608,7 @@ class WorkerData(IBufferSerializable):
             has_current_invocation_task_id, current_invocation_task_id, \
             has_current_invocation_id, current_invocation_id, \
             has_current_invocation_progress, current_invocation_progress, \
-            groups_count, has_metadata = struct.unpack('>QQQII?Q?Q?Q?dQ?', stream.readexactly(77))
+            groups_count, probe_results_count, has_metadata = struct.unpack('>QQQII?Q?Q?Q?dQQ?', stream.readexactly(85))
         if not has_current_invocation_node_id:
             current_invocation_node_id = None
         if not has_current_invocation_task_id:
@@ -583,11 +621,14 @@ class WorkerData(IBufferSerializable):
         groups = set()
         for i in range(groups_count):
             groups.add(_deserialize_string(stream))
+        probe_results = []
+        for i in range(probe_results_count):
+            probe_results.append(ContainerResourceProbeResult.deserialize(stream))
         metadata = None
         if has_metadata:
             metadata = WorkerMetadata(_deserialize_string(stream))
         return WorkerData(worker_id, hwid, last_address, last_seen_timestamp, WorkerState(state_value), WorkerType(type_value),
-                          current_invocation_node_id, current_invocation_task_id, current_invocation_id, current_invocation_progress, groups, metadata)
+                          current_invocation_node_id, current_invocation_task_id, current_invocation_id, current_invocation_progress, groups, probe_results, metadata)
 
 
 @dataclass

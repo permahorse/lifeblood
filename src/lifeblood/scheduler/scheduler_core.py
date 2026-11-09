@@ -674,6 +674,7 @@ class SchedulerCore(NodeGraphHolderBase):
             await con.execute('UPDATE workers SET "state" = ? WHERE "id" = ?',
                               (WorkerState.IDLE.value, invocation['worker_id']))
             await self._update_worker_resouce_usage(invocation['worker_id'], connection=con)  # remove resource usage info
+            self.data_access.mem_cache_workers_state[invocation['worker_id']].pop('resources_used_serialized', None)
             tasks_to_wait = []
             if not self.__use_external_log:
                 await con.execute('UPDATE invocations SET "stdout" = ?, "stderr" = ? WHERE "id" = ?',
@@ -770,6 +771,7 @@ class SchedulerCore(NodeGraphHolderBase):
             await con.execute('UPDATE workers SET "state" = ? WHERE "id" = ?',
                               (WorkerState.IDLE.value, invocation['worker_id']))
             await self._update_worker_resouce_usage(invocation['worker_id'], connection=con)  # remove resource usage info
+            self.data_access.mem_cache_workers_state[invocation['worker_id']].pop('resources_used_serialized', None)
             tasks_to_wait = []
             if not self.__use_external_log:
                 await con.execute('UPDATE invocations SET "stdout" = ?, "stderr" = ? WHERE "id" = ?',
@@ -1121,7 +1123,6 @@ class SchedulerCore(NodeGraphHolderBase):
                 return
             wid = worker_row['id']
             hwid = worker_row['hwid']
-            # print(wid)
 
             # we ensure there are no invocations running with this worker
             async with con.execute('SELECT "id", task_id, state FROM invocations WHERE worker_id = ? AND ("state" = ? OR "state" = ?)',
@@ -1253,7 +1254,7 @@ class SchedulerCore(NodeGraphHolderBase):
         if isinstance(task_ids, int):
             task_ids = [task_ids]
         query = 'UPDATE tasks SET "state" = %d WHERE "id" = ?' % state.value
-        # print('beep')
+
         async with self.data_access.data_connection() as con:
             for task_id in task_ids:
                 await con.execute('BEGIN IMMEDIATE')
@@ -1273,7 +1274,7 @@ class SchedulerCore(NodeGraphHolderBase):
                 await self.data_access.reset_task_blocking(task_id, con=con)
                 con.add_after_commit_callback(self.ui_state_access.scheduler_reports_task_updated, TaskDelta(task_id, state=state))  # ui event
                 await con.commit()  # TODO: this can be optimized into a single transaction
-        # print('boop')
+
         self.wake()
         self.poke_task_processor()
 
@@ -1668,7 +1669,6 @@ class SchedulerCore(NodeGraphHolderBase):
             group_names = set(group_names)
             groups_to_set = group_names - all_groups
             groups_to_del = all_groups - group_names
-            print(task_id, groups_to_set, groups_to_del, all_groups, group_names)
 
             for group_name in groups_to_set:
                 await con.execute('INSERT INTO task_groups (task_id, "group") VALUES (?, ?)', (task_id, group_name))

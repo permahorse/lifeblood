@@ -11,10 +11,11 @@ from ..exceptions import NotSubscribedError
 from ..scheduler_event_log import SchedulerEventLog
 from ..ui_events import TaskEvent, TaskFullState, TasksUpdated, TasksRemoved, TasksChanged
 from ..ui_protocol_data import TaskBatchData, TaskGroupData, TaskGroupBatchData, TaskGroupStatisticsData, \
-    NodeGraphStructureData, WorkerBatchData, WorkerData, WorkerResource, WorkerResourceType, WorkerResources, NodeConnectionData, NodeData, TaskData, TaskDelta, \
-    WorkerDevice, WorkerDeviceResource
+    NodeGraphStructureData, WorkerBatchData, WorkerData, WorkerResource, WorkerResources, \
+    NodeConnectionData, NodeData, TaskData, TaskDelta, \
+    WorkerDevice, WorkerDeviceResource, ContainerResourceProbeResult
 from .scheduler_component_base import SchedulerComponentBase
-from ..worker_resource_definition import WorkerResourceDefinition, WorkerResourceDataType, WorkerDeviceTypeDefinition
+from ..worker_resource_definition import WorkerResourceDefinition, WorkerResourceValue, WorkerResourceDataType, WorkerDeviceTypeDefinition
 
 from typing import Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING, Set, Union
 
@@ -317,6 +318,7 @@ class UIStateAccessor(SchedulerComponentBase):
                                    'GROUP BY workers."id"') as cur:
                 all_workers = {x['id']: x for x in ({**dict(x),
                                                      'last_seen': self.__data_access.mem_cache_workers_state[x['id']]['last_seen'],
+                                                     'resources_used': self.__data_access.mem_cache_workers_state[x['id']].get('resources_used_serialized'),
                                                      'progress': self.__data_access.get_invocation_progress(x['invoc_id']),
                                                      'metadata': self.__data_access.get_worker_metadata(x['hwid']),
                                                      } for x in await cur.fetchall())}
@@ -542,27 +544,38 @@ def _pack_workers_from_raw(db_uid: int, ui_workers: dict, ui_resources: dict, ui
     workers = {}
     for worker_id, worker_raw in ui_workers.items():
         assert worker_id == worker_raw['id']
+
+        probe_res = []
+        res_used: dict[WorkerResourceDefinition, WorkerResourceValue] = {}
+        for raw_def, raw_val in worker_raw['resources_used'] or []:
+            res_used[WorkerResourceDefinition.from_json_dict(raw_def)] = raw_val
+        for res_def, res_val in res_used.items():
+            probe_res.append(ContainerResourceProbeResult(
+                res_val,
+                res_def.type,
+                res_def.name,
+                res_def.label,
+            ))
+
         workers[worker_id] = WorkerData(worker_id, worker_raw['hwid'], worker_raw['last_address'], worker_raw['last_seen'],
                                         WorkerState(worker_raw['state']), WorkerType(worker_raw['worker_type']),
                                         worker_raw['node_id'], worker_raw['task_id'], worker_raw['invoc_id'], worker_raw['progress'],
-                                        worker_raw['groups'], worker_raw['metadata'])
+                                        worker_raw['groups'], probe_res, worker_raw['metadata'])
     worker_resources: Dict[int, List[WorkerResource]] = {}
     worker_devices: Dict[int, List[WorkerDevice]] = {}
     for hwid, res_vals in ui_resources.items():
         ress = []
         for res_def in resource_definitions:
             if res_def.type in (WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES):
-                res_type = WorkerResourceType.INT
                 convert_to_data_type = int
             elif res_def.type in (WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT):
-                res_type = WorkerResourceType.FLOAT
                 convert_to_data_type = float
             else:
                 raise NotImplementedError(f'unhandled worker resource definition type: {res_def.type}')
             ress.append(WorkerResource(
                 convert_to_data_type(res_vals[res_def.name]),
                 convert_to_data_type(res_vals[f'total_{res_def.name}']),
-                res_type,
+                res_def.type,
                 res_def.name,
             ))
         worker_resources[hwid] = ress
@@ -570,16 +583,14 @@ def _pack_workers_from_raw(db_uid: int, ui_workers: dict, ui_resources: dict, ui
         ress = []
         for res_def in device_type_to_definition[dev_type].resources:
             if res_def.type in (WorkerResourceDataType.GENERIC_INT, WorkerResourceDataType.MEMORY_BYTES):
-                res_type = WorkerResourceType.INT
                 convert_to_data_type = int
             elif res_def.type in (WorkerResourceDataType.GENERIC_FLOAT, WorkerResourceDataType.SHARABLE_COMPUTATIONAL_UNIT):
-                res_type = WorkerResourceType.FLOAT
                 convert_to_data_type = float
             else:
                 raise NotImplementedError(f'unhandled worker resource definition type: {res_def.type}')
             ress.append(WorkerDeviceResource(
                 convert_to_data_type(dev_vals[f'res__{res_def.name}']),
-                res_type,
+                res_def.type,
                 res_def.name,
             ))
         worker_devices.setdefault(hwid, []).append(WorkerDevice(

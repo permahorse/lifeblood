@@ -11,49 +11,24 @@ and produce an environment fitting those requirements
 As I see the it, a freelancer or a studio would implement one specific to them environment wrapper
 for all workers, not several different wrappers
 """
+from __future__ import annotations
 import asyncio
-import os
-import sys
-import inspect
-import pathlib
-import re
-import shutil
-from copy import deepcopy
-from semantic_version import Version, SimpleSpec
 from types import MappingProxyType
-from . import logging
-from .config import get_config
+
+from lifeblood.process_container import ProcessContainerBase, ProcessContainerFactoryBase
 from .attribute_serialization import serialize_attributes_core, deserialize_attributes_core
-from .toml_coders import TomlFlatConfigEncoder
-from .process_utils import create_process, oh_no_its_windows
-from .exceptions import ProcessInitializationError
-from .invocationjob import Environment, InvocationEnvironment, InvocationResources
+from .invocationjob import Environment, InvocationResources
 
-from typing import Dict,  Iterable, List, Mapping, Optional, Type, Union
-
-
-_resolvers: Dict[str, Type["BaseEnvironmentResolver"]] = {}  # this should be loaded from plugins
-
-
-def _populate_resolvers():
-    # TODO: This horrible logic needs refactoring. All plugins must be loaded with pluginloader
-    #  everything is tightly coupled here, interdependent... no planing
-    for k, v in dict(globals()).items():
-        if not inspect.isclass(v) \
-                or not issubclass(v, BaseEnvironmentResolver) \
-                or v == BaseEnvironmentResolver \
-                or v.__module__ != __name__:
-            continue
-        _resolvers[k] = v
-    logging.get_logger('environment_resolver_registry').debug('resolvers found:\n' + '\n'.join(f'\t{k}' for k in _resolvers))
-
-
-def get_resolver(name: str) -> "BaseEnvironmentResolver":
-    return _resolvers[name]()
+from typing import Mapping, Optional
 
 
 class ResolutionImpossibleError(RuntimeError):
     pass
+
+
+class EnvironmentResolverProviderBase:
+    def get_resolver(self, name: str) -> BaseEnvironmentResolver:
+        raise NotImplementedError()
 
 
 class EnvironmentResolverArguments:
@@ -93,12 +68,6 @@ class EnvironmentResolverArguments:
     def remove_argument(self, name: str):
         del self.__args[name]
 
-    def get_resolver(self):
-        return get_resolver(self.__resolver_name)
-
-    async def get_environment(self) -> "Environment":
-        return await get_resolver(self.name()).get_environment(self.arguments())
-
     def serialize(self) -> bytes:
         return serialize_attributes_core({
             '_EnvironmentResolverArguments__resolver_name': self.__resolver_name,
@@ -132,391 +101,22 @@ class BaseEnvironmentResolver:
         """
         raise NotImplementedError()
 
-    async def create_process(self, arguments: Mapping, call_args: List[str], *,
-                             extra_env: Union[InvocationEnvironment, Environment, None] = None,
-                             cwd: Optional[str] = None,
-                             resources_to_use: Optional[InvocationResources] = None) -> asyncio.subprocess.Process:
-        """
-        this should create process, maybe in a special way
-
-        :param arguments: EnvironmentResolverArguments for the resolver
-        :param call_args: what to call: process and arguments
-        :param extra_env: optional extra environment add to launch process in.
-        :param cwd: current working directory for the process
-        :param resources_to_use: resources that resolver should give to the process and enforce
-        """
+    async def create_container(self,
+                               arguments: Mapping,
+                               resources_to_use: InvocationResources,
+                               ) -> ProcessContainerBase:
         raise NotImplementedError()
 
 
 class BaseSimpleProcessSpawnEnvironmentResolver(BaseEnvironmentResolver):
-    async def create_process(self, arguments: Mapping, call_args: List[str], *,
-                             extra_env: Union[InvocationEnvironment, Environment, None] = None,
-                             cwd: Optional[str] = None,
-                             resources_to_use: Optional[InvocationResources] = None) -> asyncio.subprocess.Process:
-        env = await self._resolve_environment_for_process_creation(arguments, extra_env)
+    def __init__(self, process_container_factory: ProcessContainerFactoryBase):
+        self.__process_container_factory = process_container_factory
 
-        if os.path.isabs(call_args[0]):
-            bin_path = call_args[0]
-        else:
-            bin_path = shutil.which(call_args[0], path=env.get('PATH', ''))
-        if bin_path is None:
-            raise ProcessInitializationError(f'"{call_args[0]}" was not found. Check environment resolver arguments and system setup')
-
-        if cwd is None:
-            cwd = os.path.dirname(bin_path)
-
-        logger = logging.get_logger('environment resolver')
-        if resources_to_use is None:
-            logger.info('no resource restriction requested')
-        else:
-            logger.info(
-                'requested resources:\n' +
-                '\n'.join(f'\t{rname}={repr(rval)}' for rname, rval in resources_to_use.resources.items()) +
-                '\nrequested devices:\n' +
-                '\n'.join(f'\t{dev_type}:{repr(dev_names_list)}' for dev_type, dev_names_list in resources_to_use.devices.items()) +
-                '\nbut standard environment resolver has no means of enforcing these limitations'
-            )
-
-        return await create_process(call_args, env, cwd)
-
-    async def _resolve_environment_for_process_creation(self,
-                             arguments: Mapping,
-                             extra_env: Union[InvocationEnvironment, Environment, None] = None) -> Environment:
-        env = await self.get_environment(arguments)
-        if extra_env:
-            env = extra_env.resolve(base_env=env)
-        return env
-
-
-class BaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat(BaseSimpleProcessSpawnEnvironmentResolver):
-    # even though lifeblood worker runs with python interpreter - it does NOT expect
-    #  python to be available in run environment. User might want to have multiple versions of packaged python.
-    #  However, simple one user artist might not care, and would just want python code to work without any packages setup.
-    #  So to simplify the life of smaller setup users, this hack was introduced.
-    async def create_process(self, arguments: Mapping, call_args: List[str], *,
-                             extra_env: Union[InvocationEnvironment, Environment, None] = None,
-                             cwd: Optional[str] = None,
-                             resources_to_use: Optional[InvocationResources] = None) -> asyncio.subprocess.Process:
-        """
-        This introduces path to sys.executable if no python is found in PATH, yet `python` is first arg in call_args
-        """
-        env = await self._resolve_environment_for_process_creation(arguments, extra_env)
-
-        if call_args[0] in ('python', 'python.exe') and shutil.which(call_args[0], path=env.get('PATH', '')) is None:
-            if extra_env is None:
-                extra_env = InvocationEnvironment()
-            extra_env.append('PATH', os.path.dirname(sys.executable))
-
-        return await super().create_process(arguments, call_args, extra_env=extra_env, cwd=cwd, resources_to_use=resources_to_use)
-
-
-class TrivialEnvironmentResolver(BaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat):
-    """
-    trivial environment wrapper does nothing
-    """
-    async def get_environment(self, arguments: Mapping) -> "Environment":
-        env = Environment(os.environ)
-        for key, value in arguments.items():
-            env[key] = value
-        return env
-
-
-class StandardEnvironmentResolver(BaseSimpleProcessSpawnEnvironmentResolverWithPythonCheat):
-    """
-    will initialize environment based on requested software versions and it's own config
-    will raise ResolutionImpossibleError if he doesn't know how to resolve given configuration
-
-    example configuration:
-    [packages.houdini."18.5.666"]
-    env.PATH.prepend=[
-        "/path/to/hfs/bin",
-        "/some/other/path/dunno"
-    ]
-    env.PATH.append=[
-        "/whatever/you/want/to/append"
-    ]
-    env.PYTHONPATH.prepend="/dunno/smth"
-    """
-    logger = logging.get_logger('environment resolver')
-
-    def __init__(self, base_environment: Optional[Mapping] = None):
-        if base_environment is None:
-            base_environment = dict(os.environ)
-        self.__base_environment = base_environment
-
-        # attempt to locate config and autocreate if not found
-        config = get_config('standard_environment_resolver')
-        if len(config.loaded_files()) + len(config.broken_files()) == 0:
-            config.set_toml_encoder_generator(TomlFlatConfigEncoder)
-            self.logger.info('standard environment resolver is used, but no configuration found. auto generating configuration...')
-            packages = self.autodetect_software()
-            for pkgname, v in packages.items():
-                for verstr in v.keys():
-                    self.logger.info(f'found {pkgname} : {verstr}')
-            config.set_option_noasync('packages', packages)
-            self.logger.info(f'autogenerated config saved to {config.writeable_file()}')
-        elif len(config.loaded_files()) == 0:  # so all sources are broken
-            self.logger.error('environment resolver configs found, but all have errors! Aborting!')
-            raise RuntimeError('all resolver configs are broken')
-
-    async def get_environment(self, arguments: Mapping) -> "Environment":
-        """
-
-        :param arguments: are expected to be in format of package_name: version_specification
-                          like houdini
-        :return:
-        """
-        config = get_config('standard_environment_resolver')
-        packages = config.get_option_noasync('packages')
-        if packages is None:
-            raise ResolutionImpossibleError('no packages are configured')
-
-        available_software = {k: {Version(v): rest for v, rest in packages[k].items()} for k in packages.keys()}
-
-        resolved_versions = {}
-        for package, spec_str in arguments.items():
-            if not package.startswith('package.'):  # all package reqs start with package.
-                continue
-            package = package[len('package.'):]
-            if package not in available_software:
-                raise ResolutionImpossibleError(f'no configurations for package {package} found')
-            resolved_versions[package] = SimpleSpec(spec_str).select(available_software[package].keys())
-            if resolved_versions[package] is None:
-                raise ResolutionImpossibleError(f'could not satisfy version requirements {spec_str} for package {package}')
-
-        env = Environment(self.__base_environment)
-        for package, version in sorted(resolved_versions.items(), key=lambda x: available_software[x[0]][x[1]].get('priority', 50)):
-            actions = available_software[package][version]
-            for env_name, env_action in actions.get('env', {}).items():
-                if not isinstance(env_action, Mapping):
-                    env_action = {'set': env_action}
-                if 'prepend' in env_action:
-                    value = env_action['prepend']
-                    if isinstance(value, str):
-                        value = [value]
-                    for part in reversed(value):
-                        env.prepend(env_name, part)
-                if 'append' in env_action:
-                    value = env_action['append']
-                    if isinstance(value, str):
-                        value = [value]
-                    for part in value:
-                        env.append(env_name, part)
-                if 'set' in env_action:
-                    value = env_action['set']
-                    if isinstance(value, list):
-                        value = os.pathsep.join(value)
-                    env[env_name] = value
-        if 'user' in arguments:
-            for uservar in ('USER', 'LOGNAME', 'USERNAME'):
-                env[uservar] = arguments['user']
-        if oh_no_its_windows and 'PYTHONIOENCODING' not in env:
-            env['PYTHONIOENCODING'] = 'UTF-8'
-        return env
-
-    @classmethod
-    def autodetect_software(cls, base_path: Optional[str] = None, software_to_detect: Optional[Iterable[str]] = None) -> dict:
-        """
-        scans common install locations, tries to detect some software
-        (currently only works on houdini...)
-
-        :return:
-        """
-        full_software_set = {'houdini', 'blender'}
-        base = pathlib.Path(base_path) if base_path is not None else None
-        software_to_detect = set(x.lower() for x in software_to_detect) if software_to_detect is not None else full_software_set
-        all = {}
-        if 'houdini' in software_to_detect:
-            try:
-                all.update(cls.autodetect_houdini(base))
-            except Exception as e:
-                cls.logger.exception('failed to detect houdini, skipping')
-        if 'blender' in software_to_detect:
-            try:
-                all.update(cls.autodetect_blender(base))
-            except Exception as e:
-                cls.logger.exception('failed to detect blender, skipping')
-        return all
-
-    @classmethod
-    def autodetect_houdini(cls, base_path: Optional[pathlib.Path] = None) -> dict:
-        if sys.platform.startswith('linux'):
-            base = base_path or pathlib.Path(r'/opt')
-            hfs_prefix = pathlib.Path('')
-        elif sys.platform.startswith('win'):
-            base = base_path or pathlib.Path(r'C:\Program Files\Side Effects Software')
-            hfs_prefix = pathlib.Path('')
-        elif sys.platform.startswith('darwin'):
-            base = base_path or pathlib.Path(r'/Applications/Houdini')
-            hfs_prefix = pathlib.Path('Frameworks/Houdini.framework/Versions/Current/Resources')
-        else:
-            raise RuntimeError(f'unknown platform {sys.platform}')
-
-        packages = {}
-
-        houre = re.compile(r'^(?:[Hh]oudini|hfs)\s*(\d+\.\d+\.\d+)(?:\.py(\d+))?$')
-        pyre = re.compile(r'^python(\d+)\.(\d+).*$')
-        if base.exists():
-            try:
-                for houdir in base.iterdir():
-                    if not houdir.exists() or not houdir.is_dir():
-                        continue
-                    match = houre.match(str(houdir.name))
-                    if not match:
-                        continue
-
-                    for file in (houdir/hfs_prefix/'python'/'bin').iterdir():
-                        pymatch = pyre.match(str(file.name))
-                        if not pymatch:
-                            continue
-                        hpy = '_'.join((pymatch.group(1), pymatch.group(2)))
-                        break
-                    if f'houdini.py{hpy}' not in packages:
-                        packages[f'houdini.py{hpy}'] = {}
-                    packages[f'houdini.py{hpy}'][match.group(1)] = {
-                        'label': f'SideFX Houdini, with python version {hpy}',
-                        'env': {
-                            'PATH': {
-                                'prepend': str(houdir/hfs_prefix/'bin')
-                            }
-                        }
-                    }
-            except PermissionError:
-                cls.logger.error(f'no permissions to scan {base}, skipping')
-        return packages
-
-    @classmethod
-    def autodetect_blender(cls, base_path: Optional[pathlib.Path] = None) -> dict:
-        bases = []
-        packages = {}
-        if sys.platform.startswith('linux'):
-            return {}  # TODO: implement? any standard way of installinb blender is with package manager, cannot cover that case
-        elif sys.platform.startswith('win'):
-            if base_path:
-                bases.append(base_path)
-            else:
-                bases.append(pathlib.Path(r'C:\Program Files\Blender Foundation'))
-                bases.append(base_path or pathlib.Path(r'C:\Program Files (x86)\Blender Foundation'))
-            blere = re.compile(r'^(?:[Bb]lender)\s*(\d+\.\d+(?:.\d+)*)$')
-            for base in bases:
-                if not base.exists():
-                    continue
-                try:
-                    for blendir in base.iterdir():
-                        if not blendir.exists() or not blendir.is_dir():
-                            continue
-                        match = blere.match(str(blendir.name))
-                        if not match:
-                            continue
-                        if 'blender' not in packages:
-                            packages['blender'] = {}
-                        packages['blender'][match.group(1)] = {
-                            'label': 'Blender',
-                            'env': {
-                                'PATH': {
-                                    'prepend': str(blendir)
-                                }
-                            }
-                        }
-                except PermissionError:
-                    cls.logger.error(f'no permissions to scan {base}, skipping')
-        elif sys.platform.startswith('darwin'):
-            import subprocess
-            # TODO: single stupid case covered only, not in a super nice way either...
-            bases.append(base_path or pathlib.Path(r'/Applications/Blender.app/Contents/MacOS'))
-            for base in bases:
-                blenbin = base / 'blender'
-                if blenbin.exists():
-                    try:
-                        out, _ = subprocess.Popen([blenbin, '--version'], stdout=subprocess.PIPE).communicate()
-                    except:
-                        cls.logger.warning(f' could not launch {(base / "blender")} to check version')
-                        continue
-                    out = out.decode('utf-8')
-                    match = re.match(r'[Bb]lender\s*(\d+\.\d+)', out.splitlines(False)[0])
-                    if not match:
-                        continue
-                    packages['blender'][match.group(1)] = {
-                        'label': 'Blender',
-                        'env': {
-                            'PATH': {
-                                'prepend': str(base)
-                            }
-                        }
-                    }
-        else:
-            raise RuntimeError(f'unknown platform {sys.platform}')
-
-        return packages
-
-
-_populate_resolvers()
-
-
-def main(args):
-    """
-    autodetect things for standard environment resolver
-    """
-    import argparse
-    parser = argparse.ArgumentParser('environment_resolver', description='generates standard environment resolver config\n'
-                                                                         'currently only Houdini is supported')
-    subparser = parser.add_subparsers(title='command', required=True, dest='command')
-
-    cmdparser = subparser.add_parser('generate', description='generate configuration file in user dir')
-    cmdparser.add_argument('--basepath', '-p', help='optional comma (,) separated base path list to search software in')
-    cmdparser.add_argument('--output', '-o', help='save config to this file instead of default config location')
-    cmdparser.add_argument('--override', help='if set old config will be completely overwritten by a new one. '
-                                              'Otherwise only new entries will be added to the config, keeping existing'
-                                              'entries intact', action='store_true')
-
-    schparser = subparser.add_parser('scan', description='scan for software but do NOT generate config files')
-    schparser.add_argument('--basepath', '-p', help='optional comma (,) separated base path list to search software in')
-
-    opts = parser.parse_args(args)
-
-    logger = logging.get_logger('environment resolver')
-    logger.info('auto detecting packages...')
-    packages = StandardEnvironmentResolver.autodetect_software()
-    if opts.basepath:
-        for basepath in opts.basepath.split(','):
-            packages.update(StandardEnvironmentResolver.autodetect_software(basepath))
-    for pkgname, v in packages.items():
-        for verstr in v.keys():
-            logger.info(f'found {pkgname} : {verstr}')
-
-    if opts.command == 'generate':
-        config = get_config('standard_environment_resolver')
-        if opts.output:
-            config.override_config_save_location(opts.output)
-        config.set_toml_encoder_generator(TomlFlatConfigEncoder)
-
-        if opts.override:  # do full config override
-            config.set_option_noasync('packages', packages)
-            logger.info(f'autogenerated config saved to {config.writeable_file()}')
-        else:  # if not full override - only add new entries, no touch existing ones
-            conf_packages = deepcopy(config.get_option_noasync('packages', {}))
-            needs_resaving = False
-            for package_name, package_data in packages.items():
-                if package_name not in conf_packages:
-                    conf_packages[package_name] = package_data
-                    needs_resaving = True
-                    continue
-                for ver, meta in package_data.items():
-                    if ver in conf_packages[package_name]:
-                        continue
-                    conf_packages[package_name][ver] = meta
-                    needs_resaving = True
-            if needs_resaving:
-                config.set_option_noasync('packages', conf_packages)
-
-    elif opts.command == 'scan':
-        print('\n')
-        for pkgname, stuff in packages.items():
-            print(f'{pkgname}:')
-            for ver, meta in stuff.items():
-                print(f'\t{ver}' + (f' ({meta.get("label", "")})' if 'label' in meta else ''))
-                print('\n'.join(f'\t\t{k}: {v}' for k, v in meta.items() if k != 'label'))
-
-
-if __name__ == '__main__':
-    sys.exit(main(sys.argv[1:]) or 0)
+    async def create_container(self,
+                               arguments: Mapping,
+                               resources_to_use: InvocationResources,
+                               ) -> ProcessContainerBase:
+        return await self.__process_container_factory.create_process_container(
+            resources_to_use,
+            await self.get_environment(arguments),
+        )

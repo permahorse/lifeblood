@@ -8,6 +8,9 @@ import toml
 from pathlib import Path
 
 from .basenode import BaseNode
+from .environment_resolver import EnvironmentResolverProviderBase, BaseEnvironmentResolver
+from .impl.standard_environment_resolver import StandardEnvironmentResolver
+from .impl.trivial_environment_resolver import TrivialEnvironmentResolver
 from .node_dataprovider_base import NodeDataProvider
 from .snippets import NodeSnippetData
 from . import logging, plugin_info
@@ -415,3 +418,17 @@ class PluginNodeDataProvider(NodeDataProvider):
                 self.__default_settings_config[node_type_name] = settings_name
         else:
             raise NotImplementedError("TBD")
+
+
+class PluginEnvironmentResolverProvider(EnvironmentResolverProviderBase):
+    def __init__(self):
+        # hardcoded for now,
+        # TODO: make actual generic plugin loading
+        super().__init__()
+        self.__resolver_classes = {
+            'TrivialEnvironmentResolver': TrivialEnvironmentResolver,
+            'StandardEnvironmentResolver': StandardEnvironmentResolver,
+        }
+
+    def get_resolver(self, name: str) -> BaseEnvironmentResolver:
+        return self.__resolver_classes[name]()

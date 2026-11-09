@@ -11,7 +11,7 @@ from .net_messages.impl.tcp_simple_command_message_processor import TcpCommandMe
 from .net_messages.impl.clients import CommandJsonMessageClient
 from .net_messages.address import AddressChain
 from .net_messages.exceptions import MessageReceiveTimeoutError
-from .worker_resource_definition import WorkerResourceDefinition, WorkerDeviceTypeDefinition
+from .worker_resource_definition import WorkerResourceDefinition, WorkerDeviceTypeDefinition, WorkerResourceValue
 
 from typing import List, Optional, Set, Tuple
 
@@ -97,11 +97,15 @@ class SchedulerWorkerControlClient(SchedulerBaseClient):
         reply = await self.__client.receive_message()
         assert (await reply.message_body_as_json()).get('ok', False), 'something is not ok'
 
-    async def report_invocation_progress(self, invocation_id: int, progress: float):
-        await self.__client.send_command('worker.progress_report', {
+    async def report_invocation_progress(self, invocation_id: int, progress: float, resource_usage: dict[WorkerResourceDefinition, WorkerResourceValue] | None = None):
+        command_data: dict = {
             'invocation_id': invocation_id,
             'progress': progress,
-        })
+            'resource_probe_result': [[d.to_json_dict(), v] for d, v in
+                                      resource_usage.items()] if resource_usage is not None else None,
+        }
+        await self.__client.send_command('worker.progress_report', command_data)
+
         reply = await self.__client.receive_message()
         assert (await reply.message_body_as_json()).get('ok', False), 'something is not ok'
 

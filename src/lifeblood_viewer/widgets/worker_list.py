@@ -1,10 +1,13 @@
 from dataclasses import dataclass
-from lifeblood.ui_protocol_data import WorkerData, WorkerBatchData, WorkerResources, WorkerMetadata
+from copy import copy
+from lifeblood.ui_protocol_data import WorkerData, WorkerBatchData, WorkerResources, WorkerMetadata, \
+    ContainerResourceProbeResult
 from lifeblood.enums import WorkerType, WorkerState
 from lifeblood.text import nice_memory_formatting
 from lifeblood.logging import get_logger
 from lifeblood.timestamp import global_timestamp_to_local_datetime
 from lifeblood.misc import performance_measurer
+from lifeblood.worker_resource_definition import WorkerResourceDataType
 from lifeblood_viewer.connection_worker import SchedulerConnectionWorker
 from lifeblood_viewer.models.multiple_sort_model import MultipleFilterSortProxyModel
 
@@ -12,10 +15,12 @@ from PySide6.QtWidgets import QWidget, QTreeView, QHBoxLayout, QVBoxLayout, QMen
 from PySide6.QtCore import Slot, Signal, Qt, QAbstractItemModel, QModelIndex, QPoint
 from PySide6.QtGui import QColor
 
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, OrderedDict
 
-
-_init_column_order_prototype = ('id', 'state', 'progress', 'task_id', 'metadata.hostname', 'last_address', 'last_seen', '__resources__', 'devices', 'groups', 'worker_type')
+_init_column_order_prototype = (
+    'id', 'state', 'progress', 'task_id', 'metadata.hostname', 'last_address', 'last_seen', '__resources__',
+    'devices', 'probes', 'groups', 'worker_type',
+)
 
 
 class WorkerListWidget(QWidget):
@@ -109,6 +114,7 @@ class WorkerModelData:  # almost like WorkerData, but better for display
     current_invocation_id: Optional[int]
     current_invocation_progress: Optional[float]
     groups: Set[str]
+    container_probe_results: List[ContainerResourceProbeResult]
     metadata: Optional[WorkerMetadata]
 
     @classmethod
@@ -195,7 +201,8 @@ class WorkerModel(QAbstractItemModel):
 
             self.__cols = {'id': 'id', 'state': 'state', 'metadata.hostname': 'hostname', 'last_address': 'address',
                            'last_seen': 'last seen', 'worker_type': 'type',
-                           'progress': 'progress', 'devices': 'devices', 'groups': 'groups', 'task_id': 'task id'}
+                           'progress': 'progress', 'devices': 'devices', 'groups': 'groups', 'task_id': 'task id',
+                           'probes': 'probes'}
 
             self.__cols.update({k: k.replace('_', ' ') for k in self.__worker_resources_names})
 
@@ -240,6 +247,7 @@ class WorkerModel(QAbstractItemModel):
         w_instate_count = 0
         w_total_count = 0
         summ_address = workers[0].last_address.rsplit('|', 1)[0] if len(workers) else 'unknown'
+        summ_probes = OrderedDict()
         for worker in workers:
             if worker.state == state:
                 w_instate_count += 1
@@ -248,6 +256,13 @@ class WorkerModel(QAbstractItemModel):
             # address
             if summ_address != worker.last_address.rsplit('|', 1)[0]:
                 summ_address = '<multiple>'
+            # probes
+            for prob_res in worker.container_probe_results:
+                if prob_res.name not in summ_probes:
+                    summ_probes[prob_res.name] = copy(prob_res)
+                else:
+                    # TODO: need to accumulate base on type
+                    summ_probes[prob_res.name].value += prob_res.value
 
 
         return WorkerModelData(
@@ -263,15 +278,24 @@ class WorkerModel(QAbstractItemModel):
             None,
             min(x.current_invocation_progress or 100 for x in workers) if len(workers) else None,
             workers[0].groups if len(workers) else (),
+            list(summ_probes.values()),
             workers[0].metadata if len(workers) else None,
         )
+    
+    @staticmethod
+    def _format_display(col_name, raw, *, data_type=None):
+        if data_type == WorkerResourceDataType.MEMORY_BYTES or col_name.endswith('_mem') or col_name == 'mem':
+            return nice_memory_formatting(raw)
+        return raw
+
+    @staticmethod
+    def _format_label(name: str):
+        return {
+            'cpu_load': '🖥',
+            'cpu_mem': '⛃',
+        }.get(name)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
-        def format_display(col_name, raw):
-            if col_name.endswith('_mem') or col_name == 'mem':
-                return nice_memory_formatting(raw)
-            return raw
-
         if not index.isValid():
             return None
         if role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.EditRole, Qt.ItemDataRole.BackgroundRole, self.SORT_ROLE):
@@ -339,6 +363,8 @@ class WorkerModel(QAbstractItemModel):
             if worker.type is None:
                 return None
             return worker.type.name
+        if col_name == 'probes':
+            return ', '.join(f'{self._format_label(x.name) or x.label}:{self._format_display(x.label, x.value, data_type=x.type)}' for x in worker.container_probe_results)
 
         raw_data = 'none'
         if col_name in self.__worker_resources_names:
@@ -350,7 +376,7 @@ class WorkerModel(QAbstractItemModel):
             if len(worker_resources) <= i or worker_resources[i].name != col_name:  # if data is called after worker_resource_names update, but before actual worker data update:
                 raw_data = '...'
             else:
-                raw_data = f'{format_display(col_name, worker_resources[i].value)}/{format_display(col_name, worker_resources[i].total)}'
+                raw_data = f'{self._format_display(col_name, worker_resources[i].value)}/{self._format_display(col_name, worker_resources[i].total)}'
         if col_name == 'devices':
             if index.parent().isValid():  # do not display hw devices on children since it's all the same
                 return
@@ -362,7 +388,7 @@ class WorkerModel(QAbstractItemModel):
                 if role == Qt.ItemDataRole.ToolTipRole:
                     res_parts = []
                     for dev_res in worker_device.resources:
-                        res_parts.append(f'{dev_res.name}={format_display(dev_res.name, dev_res.value)}')
+                        res_parts.append(f'{dev_res.name}={self._format_display(dev_res.name, dev_res.value)}')
                         text += f' ({",".join(res_parts)})'
                 dev_info_parts.append(text)
             return '\n'.join(dev_info_parts)
