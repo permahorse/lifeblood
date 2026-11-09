@@ -38,7 +38,10 @@ class PsutilsResourceProbe(ResourceProbeBase):
             p = psutil.Process(proc.get_pid())
             processes.append(p)
             processes += await asyncio.get_event_loop().run_in_executor(None, p.children, True)
-        return await asyncio.get_event_loop().run_in_executor(None, self._probe_noasync, processes, resource_subset)
+        try:
+            return await asyncio.get_event_loop().run_in_executor(None, self._probe_noasync, processes, resource_subset)
+        except psutil.Error:
+            return {}
 
     def _probe_noasync(self, processes: list[psutil.Process], resource_subset: set[WorkerResourceDefinition] | None):
         result = {}
