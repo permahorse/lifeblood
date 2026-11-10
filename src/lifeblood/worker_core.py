@@ -801,7 +801,10 @@ class WorkerCore:
                 return None
             all_results = {}
             for probe in self.__hardware_probes:
-                all_results.update(await probe.probe(self.__running_process_container, None))
+                try:
+                    all_results.update(await probe.probe(self.__running_process_container, None))
+                except Exception:
+                    self.__logger.exception('failed to probe hardware probe')
 
             return all_results
 

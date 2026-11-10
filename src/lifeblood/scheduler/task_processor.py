@@ -453,6 +453,8 @@ class TaskProcessor(SchedulerComponentBase):
                                                      (WorkerState.BUSY.value, worker_row['id']))
                     await submit_transaction.execute('UPDATE invocations SET state = ? WHERE "id" = ?',
                                                      (InvocationState.IN_PROGRESS.value, invocation_id))
+                    # poke pinger cuz busy workers probably require shorter ping intervals
+                    self.scheduler.poke_pinger()
                 else:  # on anything but success - cancel transaction
                     self.__logger.warning(f'submitter failed, rolling back for wid {worker_row["id"]}')
                     ui_task_delta.state = TaskState.READY  # for ui event
