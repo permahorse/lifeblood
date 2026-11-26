@@ -1248,7 +1248,15 @@ class SchedulerCore(NodeGraphHolderBase):
         :param state:
         :return:
         """
-        if state in (TaskState.IN_PROGRESS, TaskState.GENERATING, TaskState.POST_GENERATING):
+        if state not in (
+            TaskState.WAITING,
+            TaskState.READY,
+            TaskState.POST_WAITING,
+            TaskState.DONE,
+            TaskState.ERROR,
+            TaskState.WAITING_BLOCKED,
+            TaskState.POST_WAITING_BLOCKED,
+        ):
             self.__logger.error(f'cannot force task {task_ids} into state {state}')
             return
         if isinstance(task_ids, int):
