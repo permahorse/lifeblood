@@ -35,7 +35,10 @@ class PsutilsResourceProbe(ResourceProbeBase):
         for proc in await container.all_processes():
             if not isinstance(proc, AsyncioProcess):
                 raise ContainerNotSupportedError('no pid - no probe')
-            p = psutil.Process(proc.get_pid())
+            try:
+                p = psutil.Process(proc.get_pid())
+            except psutil.NoSuchProcess:
+                continue
             processes.append(p)
             try:
                 processes += await asyncio.get_event_loop().run_in_executor(None, p.children, True)

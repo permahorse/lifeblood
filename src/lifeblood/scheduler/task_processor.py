@@ -383,6 +383,11 @@ class TaskProcessor(SchedulerComponentBase):
                         'INSERT INTO invocations ("task_id", "worker_id", "state", "node_id") VALUES (?, ?, ?, ?)',
                         (task_id, worker_row['id'], InvocationState.INVOKING.value, task_row['node_id'])) as incur:
                     invocation_id = incur.lastrowid  # rowid should be an alias to id, acc to sqlite manual
+
+                # resources must be retrieved within this transaction
+                resources = await self.scheduler.data_access.get_invocation_resources_assigned_to(worker_row['id'])
+                assert resources is not None, f'logic failed, resources is None, it cannot be!'
+
                 await submit_transaction.commit()
             assert not submit_transaction.in_transaction, "logic failed, we must not be in transaction at this point"
             # first transaction complete here
@@ -391,8 +396,6 @@ class TaskProcessor(SchedulerComponentBase):
 
             # set some job attributes
             job._set_task_attributes(task_attributes)  # TODO: this is done here to optimize DB load a bit, but task_attributes must be part of invocationjob definition from it's generation
-            resources = await self.scheduler.data_access.get_invocation_resources_assigned_to(worker_row['id'])
-            assert resources is not None, f'logic failed, resources is None, it cannot be!'
             invocation = Invocation(job, invocation_id, task_id, resources)
 
             # actually communicating submission to the worker
@@ -809,6 +812,9 @@ class TaskProcessor(SchedulerComponentBase):
                 task.cancel()
         if len(tasks_to_wait) > 0:
             await asyncio.wait(tasks_to_wait, return_when=asyncio.ALL_COMPLETED)
+            for task in tasks_to_wait:
+                if task.exception() is not None:
+                    await task  # re-raise exceptions
         self.__logger.info('task processor finished')
 
     async def __process_ready(self, all_task_rows, tasks_to_wait, *, con: aiosqlite_overlay.ConnectionWithCallbacks) -> int:

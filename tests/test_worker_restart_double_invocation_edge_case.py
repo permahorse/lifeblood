@@ -133,9 +133,6 @@ class WorkerRestartDoubleInvocationCaseTest(IsolatedAsyncioTestCaseWithDb):
             node_data_provider=None,
             node_serializers=[None],
         )
-        data_access = DataAccess(config_provider=config)
-        m = mock.MagicMock()
-        m.data_access = data_access
         task_ids = []
         for i in range(racing_tasks_count):
             task_ids.append(await sched.data_access.create_task(TaskSpawnData(f'test{1+i}', None, {}, TaskState.INVOKING, 1, 'main', None)))

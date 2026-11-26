@@ -38,11 +38,17 @@ class AsyncioProcess(ProcessBase):
         self.__kill_task = create_task(self.__kill())
 
     async def __kill(self):
-        self.__process.terminate()
+        try:
+            self.__process.terminate()
+        except ProcessLookupError:
+            return
         try:
             await asyncio.wait_for(self.__process.wait(), 10)
         except TimeoutError:
-            self.__process.kill()
+            try:
+                self.__process.kill()
+            except ProcessLookupError:
+                pass
 
     def get_pid(self) -> int:
         return self.__process.pid
